@@ -1,0 +1,54 @@
+*.py[cod]
+*.egg-info/
+*.log
+*.pid
+*.tmp
+*.bak*
+._*
+
+.DS_Store
+.idea/
+.ipynb_checkpoints/
+.pytest_cache/
+.ruff_cache/
+.secrets/
+.venv/
+__pycache__/
+
+# Models, datasets, environments, caches, and experiment outputs.
+checkpoints/
+data/
+datasets/
+envs/
+logs/
+models/
+runtime/
+train_out/
+wheels/
+swanlog/
+
+# Keep vendored source, but never commit downloaded simulator assets or outputs.
+third_party/RoboTwin/assets/
+third_party/RoboTwin/eval_result/
+third_party/RoboTwin/results/
+third_party/RoboTwin/.assets-tracked-backup/
+third_party/RoboTwin/envs/curobo/build/
+third_party/RoboTwin/envs/curobo/dist/
+third_party/RoboTwin/envs/curobo/*.egg-info/
+third_party/RoboTwin/envs/curobo/src/curobo/content/assets/
+
+# Large artifacts.
+*.ckpt
+*.onnx
+*.pth
+*.pt
+*.safetensors
+*.tar
+*.tar.gz
+*.zip
+*.mp4
+
+# The audited seed cache is intentionally versioned.
+!evaluation/robotwin/seed_cache/
+!evaluation/robotwin/seed_cache/demo_clean_seed0_n100.json
+!evaluation/robotwin/seed_cache/demo_clean_32tasks_seed0_n100.json

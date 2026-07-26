@@ -1,0 +1,4 @@
+export ROBOTWIN_DIR="${ROBOTWIN_DIR:-${ROOT}/third_party/RoboTwin}"
+export LD_LIBRARY_PATH=/usr/lib64:/usr/lib:${LD_LIBRARY_PATH:-}
+export PYTHONPATH="${PYTHONPATH:-}:${ROOT}"
+export HF_ENDPOINT="https://hf-mirror.com"

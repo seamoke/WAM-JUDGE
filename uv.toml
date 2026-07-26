@@ -1,0 +1,3 @@
+# China-friendly defaults for uv (Tsinghua PyPI mirror)
+[pip]
+index-url = "https://pypi.tuna.tsinghua.edu.cn/simple"

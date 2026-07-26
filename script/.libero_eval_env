@@ -1,0 +1,2 @@
+export MUJOCO_GL=osmesa
+export PYTHONPATH="${PYTHONPATH:-}:/workspace/lingbot-va/third_party/LIBERO"
