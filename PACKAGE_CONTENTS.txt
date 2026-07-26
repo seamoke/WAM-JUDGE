@@ -101,6 +101,7 @@ script/.libero_eval_env
 script/.robotwin_eval_env
 script/audit_robotwin_clean_dataset.py
 script/audit_robotwin_clean_eval.py
+script/compare_checkpoint_to_base.py
 script/convert_libero_hdf5_to_lerobot.py
 script/download_cn.sh
 script/download_convert_libero_3suite.sh
@@ -162,6 +163,7 @@ script/run_robotwin_clean_eval_portable.sh
 script/run_robotwin_clean_official_calibration.sh
 script/run_robotwin_clean_train_portable.sh
 script/run_robotwin_clean_zipbaseline_4xh100_10k.sh
+script/run_robotwin_clean_zipbaseline_4xh100_10k_with_delta_audit.sh
 script/run_robotwin_eval.sh
 script/run_robotwin_eval_fast.sh
 script/run_robotwin_eval_pipeline.sh
