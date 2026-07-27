@@ -24,19 +24,28 @@ fi
 
 BATCH_SIZE="${BATCH_SIZE:-1}"
 TARGET_GLOBAL_BATCH="${TARGET_GLOBAL_BATCH:-64}"
+if (( TARGET_GLOBAL_BATCH != 64 )); then
+  echo "This aligned training protocol requires TARGET_GLOBAL_BATCH=64; got ${TARGET_GLOBAL_BATCH}." >&2
+  exit 2
+fi
 if [[ -z "${GRADIENT_ACCUMULATION_STEPS:-}" ]]; then
   denominator=$((BATCH_SIZE * NGPU))
   if (( TARGET_GLOBAL_BATCH % denominator != 0 )); then
     echo "TARGET_GLOBAL_BATCH=${TARGET_GLOBAL_BATCH} is not divisible by batch_size*NGPU=${denominator}." >&2
-    echo "Set GRADIENT_ACCUMULATION_STEPS explicitly or use a compatible GPU count." >&2
+    echo "Use a compatible GPU count and per-GPU batch; this protocol requires exact global batch 64." >&2
     exit 2
   fi
   GRADIENT_ACCUMULATION_STEPS=$((TARGET_GLOBAL_BATCH / denominator))
 fi
 GLOBAL_BATCH=$((BATCH_SIZE * NGPU * GRADIENT_ACCUMULATION_STEPS))
+if (( GLOBAL_BATCH != TARGET_GLOBAL_BATCH )); then
+  echo "Computed global batch ${GLOBAL_BATCH} does not match required TARGET_GLOBAL_BATCH=${TARGET_GLOBAL_BATCH}." >&2
+  echo "Adjust the visible GPU count, per-GPU batch, or gradient accumulation before starting." >&2
+  exit 2
+fi
 
-NUM_STEPS="${NUM_STEPS:-10000}"
-SAVE_INTERVAL="${SAVE_INTERVAL:-2000}"
+NUM_STEPS="${NUM_STEPS:-20000}"
+SAVE_INTERVAL="${SAVE_INTERVAL:-5000}"
 if (( NUM_STEPS % SAVE_INTERVAL != 0 )); then
   echo "NUM_STEPS must be divisible by SAVE_INTERVAL." >&2
   exit 2

@@ -8,8 +8,8 @@
 4. 审计 50 个 Clean 任务、2500 条轨迹及预计算 latent；
 5. 先用官方 RoboTwin 模型校准评测器，确认 32 任务成功率不低于 85%；
 6. 仅使用 Clean 数据从 `lingbot-va-base` 开始训练；
-7. 运行 10,000 optimizer steps，每 2,000 steps 保存 checkpoint；
-8. 用完全相同的协议评测 2K/4K/6K/8K/10K checkpoint；
+7. 运行 20,000 optimizer steps，每 5,000 steps 保存 checkpoint；
+8. 用完全相同的协议评测 5K/10K/15K/20K checkpoint；
 9. 审计每个任务的成功率、seed、timing、墙钟时间和异常恢复记录。
 
 仓库地址：
@@ -31,8 +31,8 @@ https://github.com/seamoke/WAM-JUDGE
 | 训练初始化 | `Robbyant/lingbot-va-base` |
 | 训练数据 | 只使用 `lerobot_robotwin_eef_clean_50` |
 | 下载范围 | 完整 `robotwin-clean-and-aug-lerobot`，Clean 和 Aug 都下载 |
-| 训练步数 | 10,000 optimizer steps |
-| 保存步数 | 2,000 / 4,000 / 6,000 / 8,000 / 10,000 |
+| 训练步数 | 20,000 optimizer steps |
+| 保存步数 | 5,000 / 10,000 / 15,000 / 20,000 |
 | 单卡 batch | 1 |
 | 目标 global batch | 64 |
 | 学习率 | `1e-5` |
@@ -68,8 +68,8 @@ $$
 训练：
 script/run_robotwin_clean_train_portable.sh
 
-4xH100 ZIP 基线训练 + checkpoint 差分 watcher：
-script/run_robotwin_clean_zipbaseline_4xh100_10k_with_delta_audit.sh
+任意兼容 GPU 数、global batch 64、20K ZIP 基线训练 + checkpoint 差分 watcher：
+script/run_robotwin_clean_zipbaseline_global64_20k_with_delta_audit.sh
 
 checkpoint 与 base 权重差分：
 script/compare_checkpoint_to_base.py
@@ -87,7 +87,7 @@ script/audit_robotwin_clean_dataset.py
 script/audit_robotwin_clean_eval.py
 ```
 
-这些 portable 脚本负责检查路径、模型 attention mode、global batch、固定 seed、正式渲染参数和结果完整性。4xH100 正式启动优先使用带 delta audit 的包装器；`run_robotwin_clean_train_portable.sh` 是不启动 watcher 的通用 GPU 数入口。
+这些 portable 脚本负责检查路径、模型 attention mode、global batch、固定 seed、正式渲染参数和结果完整性。正式启动优先使用带 delta audit 的 global64 包装器；`run_robotwin_clean_train_portable.sh` 是不启动 watcher 的通用入口。
 
 ### 0.3 最终验收标准
 
@@ -98,10 +98,10 @@ script/audit_robotwin_clean_eval.py
 [ ] Clean 数据审计为 DATASET_AUDIT_OK
 [ ] RoboTwin Vulkan/RT 渲染检查通过
 [ ] 官方模型完成 32x20 且 SR >= 85%
-[ ] 训练日志到达 10000/10000
+[ ] 训练日志到达 20000/20000
 [ ] exit_code 内容为 0
 [ ] 日志包含 TRAIN_DONE rc=0
-[ ] 恰好存在 5 个目标 checkpoint
+[ ] 恰好存在 4 个目标 checkpoint
 [ ] 每个 checkpoint 的模型权重和 config.json 非空
 [ ] 每个自有 checkpoint 都使用同一 32x20 协议评测
 [ ] 每个 summary.json 均通过 seed/timing/res 严格审计
@@ -620,11 +620,11 @@ Clean 数据包含 50 个任务，每个任务 50 条 episode，共 2500 条轨�
 按约 2492 个有效 segment 和 global batch 64 估算：
 
 ```text
-10000 optimizer steps x 64 = 640000 segment draws
-640000 / 2492 ≈ 257 dataset-equivalent passes
+20000 optimizer steps x 64 = 1280000 segment draws
+1280000 / 2492 ≈ 514 dataset-equivalent passes
 ```
 
-这里的 pass 是按 segment 数量估算，不等价于完整视频轨迹被逐帧完整遍历 257 次。因此不能仅凭“epoch 数”判断最好 checkpoint，必须评测 2K/4K/6K/8K/10K。
+这里的 pass 是按 segment 数量估算，不等价于完整视频轨迹被逐帧完整遍历 514 次。因此不能仅凭“epoch 数”判断最好 checkpoint，必须评测 5K/10K/15K/20K。
 
 ---
 
@@ -846,8 +846,8 @@ warmup_steps: 10
 lr_scheduler: constant
 activation_checkpointing: 1
 max_episode_frames: effectively disabled
-num_steps: 10000
-save_steps: 2000,4000,6000,8000,10000
+num_steps: 20000
+save_steps: 5000,10000,15000,20000
 SwanLab: enabled, offline by default
 ```
 
@@ -855,13 +855,15 @@ SwanLab: enabled, offline by default
 
 | GPU 数 | batch/GPU | gradient accumulation | global batch |
 |---:|---:|---:|---:|
+| 1 | 1 | 64 | 64 |
+| 2 | 1 | 32 | 64 |
 | 4 | 1 | 16 | 64 |
 | 8 | 1 | 8 | 64 |
 | 16 | 1 | 4 | 64 |
 | 32 | 1 | 2 | 64 |
 | 64 | 1 | 1 | 64 |
 
-GPU 数必须能整除目标 global batch，否则显式设置 `GRADIENT_ACCUMULATION_STEPS`。
+当前 DDP 实现要求所有 rank 的单卡 batch 和 accumulation 相同，因此精确 global batch 64 支持的 GPU 数为 64 的正整数因子，例如 1/2/4/8/16/32/64。3、6、10 等 GPU 数无法在 `batch/GPU=1` 和整数 accumulation 下精确组成 64，正式包装器会拒绝启动，不会静默改变实验协议。
 
 ### 9.2 SwanLab 登录
 
@@ -880,7 +882,7 @@ export LINGBOT_SWANLAB_PROJECT=lingbot-va-robotwin
 export LINGBOT_SWANLAB_MODE=offline
 ```
 
-### 9.3 4xH100 标准启动命令
+### 9.3 Global-batch-64 标准启动命令
 
 先确认 GPU 空闲：
 
@@ -892,13 +894,13 @@ pgrep -af "torch.distributed.run|wan_va.train" || true
 设置唯一 RUN_ID：
 
 ```bash
-export RUN_ID="robotwin_clean_zipbaseline_4xh100_b1_ga16_constant_10000steps_ckpt2000_$(date +%Y%m%d_%H%M%S)"
+export RUN_ID="robotwin_clean_zipbaseline_4xh100_b1_ga16_global64_constant_20000steps_ckpt5000_$(date +%Y%m%d_%H%M%S)"
 export CUDA_VISIBLE_DEVICES=0,1,2,3
 export NGPU=4
 export BATCH_SIZE=1
 export TARGET_GLOBAL_BATCH=64
-export NUM_STEPS=10000
-export SAVE_INTERVAL=2000
+export NUM_STEPS=20000
+export SAVE_INTERVAL=5000
 export WARMUP_STEPS=10
 export LR_SCHEDULER=constant
 export ACTIVATION_CHECKPOINTING=1
@@ -910,18 +912,19 @@ export ACTIVATION_CHECKPOINTING=1
 cd "$LINGBOT_ROOT/code"
 source .venv/bin/activate
 
-tmux new -s lingbot-clean-10k
-bash script/run_robotwin_clean_zipbaseline_4xh100_10k_with_delta_audit.sh
+tmux new -s lingbot-clean-20k
+bash script/run_robotwin_clean_zipbaseline_global64_20k_with_delta_audit.sh
 ```
 
 该包装器会：
 
-1. 启动固定 4xH100 ZIP 基线训练；
-2. 写出训练 PID；
-3. 在 `.venv` 中启动独立 checkpoint watcher；
-4. 分别审计 2K/4K/6K/8K/10K；
-5. 训练完成后等待五个差分审计全部结束；
-6. 分别保存训练和 watcher 的退出码。
+1. 根据 `NGPU` 自动设置 `gradient_accumulation=64/NGPU`；
+2. 启动 ZIP 基线 20K 训练并固定 global batch 64；
+3. 写出训练 PID；
+4. 在 `.venv` 中启动独立 checkpoint watcher；
+5. 分别审计 5K/10K/15K/20K；
+6. 训练完成后等待四个差分审计全部结束；
+7. 分别保存训练和 watcher 的退出码。
 
 如果不需要自动差分 watcher，才使用通用入口：
 
@@ -945,15 +948,14 @@ $LINGBOT_ROOT/train_out/robotwin/<RUN_ID>/
 │   ├── watcher.pid
 │   ├── watcher_exit_code
 │   ├── watch_status.json
-│   ├── checkpoint_step_2000_vs_base.json
-│   ├── checkpoint_step_2000_vs_base.txt
+│   ├── checkpoint_step_5000_vs_base.json
+│   ├── checkpoint_step_5000_vs_base.txt
 │   └── ...
 └── checkpoints/
-    ├── checkpoint_step_2000/
-    ├── checkpoint_step_4000/
-    ├── checkpoint_step_6000/
-    ├── checkpoint_step_8000/
-    └── checkpoint_step_10000/
+    ├── checkpoint_step_5000/
+    ├── checkpoint_step_10000/
+    ├── checkpoint_step_15000/
+    └── checkpoint_step_20000/
 ```
 
 脚本拒绝覆盖已存在的 `OUT`。重新开始实验必须使用新 RUN_ID；不要删除旧结果来复用名字。
@@ -990,8 +992,8 @@ find "$RUN_ROOT/checkpoints" -maxdepth 2 -type f -printf "%s %p\n" | sort -n
 
 健康训练应满足：
 
-- 4 个 rank 都存活；
-- 4 张卡都有稳定显存和计算利用率；
+- `NGPU` 个 rank 都存活；
+- 所有可见 GPU 都有稳定显存和计算利用率；
 - step 持续增加；
 - loss、grad norm 和 learning rate 为有限值；
 - checkpoint 到达目标步数后完整落盘；
@@ -1010,15 +1012,15 @@ tail -n 50 "$RUN_ROOT/train.log"
 exit_code = 0
 train_exit_code = 0
 checkpoint_delta_vs_base/watcher_exit_code = 0
-日志到达 10000/10000
+日志到达 20000/20000
 TRAIN_DONE rc=0
-watch_status.json 中 completed_steps = [2000,4000,6000,8000,10000]
+watch_status.json 中 completed_steps = [5000,10000,15000,20000]
 ```
 
-检查恰好 5 个 checkpoint：
+检查恰好 4 个 checkpoint：
 
 ```bash
-for step in 2000 4000 6000 8000 10000; do
+for step in 5000 10000 15000 20000; do
   ckpt="$RUN_ROOT/checkpoints/checkpoint_step_${step}"
   test -d "$ckpt"
   test -s "$ckpt/transformer/diffusion_pytorch_model.safetensors"
@@ -1049,7 +1051,7 @@ done
 如果按第 9.3 节使用：
 
 ```bash
-bash script/run_robotwin_clean_zipbaseline_4xh100_10k_with_delta_audit.sh
+bash script/run_robotwin_clean_zipbaseline_global64_20k_with_delta_audit.sh
 ```
 
 则无需再手动启动 watcher。检查：
@@ -1062,18 +1064,18 @@ tail -n 100 "$RUN_ROOT/checkpoint_delta_vs_base/watcher.log"
 每个 checkpoint 会输出：
 
 ```text
-checkpoint_step_2000_vs_base.json
-checkpoint_step_2000_vs_base.txt
+checkpoint_step_5000_vs_base.json
+checkpoint_step_5000_vs_base.txt
 ...
-checkpoint_step_10000_vs_base.json
-checkpoint_step_10000_vs_base.txt
+checkpoint_step_20000_vs_base.json
+checkpoint_step_20000_vs_base.txt
 ```
 
 `watch_status.json` 最终应为：
 
 ```json
 {
-  "completed_steps": [2000, 4000, 6000, 8000, 10000],
+  "completed_steps": [5000, 10000, 15000, 20000],
   "pending_steps": [],
   "failures": {}
 }
@@ -1084,8 +1086,8 @@ checkpoint_step_10000_vs_base.txt
 ```bash
 python script/compare_checkpoint_to_base.py compare \
   --base "$LINGBOT_ROOT/models/lingbot-va-base" \
-  --checkpoint "$RUN_ROOT/checkpoints/checkpoint_step_2000" \
-  --output "$RUN_ROOT/checkpoint_delta_vs_base/checkpoint_step_2000_vs_base.json"
+  --checkpoint "$RUN_ROOT/checkpoints/checkpoint_step_5000" \
+  --output "$RUN_ROOT/checkpoint_delta_vs_base/checkpoint_step_5000_vs_base.json"
 ```
 
 程序同时生成同名 `.txt` 摘要。退出码为 0 且 `audit_ok=true` 才表示：
@@ -1106,7 +1108,7 @@ nohup "$LINGBOT_ROOT/code/.venv/bin/python" \
   script/compare_checkpoint_to_base.py watch \
   --base "$LINGBOT_ROOT/models/lingbot-va-base" \
   --checkpoint-root "$RUN_ROOT/checkpoints" \
-  --steps 2000,4000,6000,8000,10000 \
+  --steps 5000,10000,15000,20000 \
   --output "$RUN_ROOT/checkpoint_delta_vs_base" \
   --poll-seconds 60 \
   --stable-polls 2 \
@@ -1135,7 +1137,7 @@ JSON 的 `overall` 包含：
 ```bash
 BASE="$LINGBOT_ROOT/models/lingbot-va-base/transformer/diffusion_pytorch_model.safetensors"
 
-for step in 2000 4000 6000 8000 10000; do
+for step in 5000 10000 15000 20000; do
   CKPT="$RUN_ROOT/checkpoints/checkpoint_step_${step}/transformer/diffusion_pytorch_model.safetensors"
   test -s "$CKPT"
   sha256sum "$CKPT"
@@ -1154,7 +1156,7 @@ done
 
 ---
 
-## 11. 对齐评测 2K/4K/6K/8K/10K
+## 11. 对齐评测 5K/10K/15K/20K
 
 ### 11.1 前置条件
 
@@ -1183,7 +1185,7 @@ export LINGBOT_ROOT=/path/to/Lingbot-va
 export NGPU=4
 export CUDA_VISIBLE_DEVICES=0,1,2,3
 
-export CHECKPOINT_PATH="$RUN_ROOT/checkpoints/checkpoint_step_2000"
+export CHECKPOINT_PATH="$RUN_ROOT/checkpoints/checkpoint_step_5000"
 bash script/run_robotwin_clean_checkpoint_eval.sh
 ```
 
@@ -1200,7 +1202,7 @@ bash script/run_robotwin_clean_checkpoint_eval.sh
 
 ```bash
 export CALIBRATION_SUMMARY=/path/to/official-calibration/summary.json
-export CHECKPOINT_PATH="$RUN_ROOT/checkpoints/checkpoint_step_4000"
+export CHECKPOINT_PATH="$RUN_ROOT/checkpoints/checkpoint_step_10000"
 bash script/run_robotwin_clean_checkpoint_eval.sh
 ```
 
@@ -1209,7 +1211,7 @@ bash script/run_robotwin_clean_checkpoint_eval.sh
 不要并行评测多个 checkpoint。串行运行：
 
 ```bash
-for step in 2000 4000 6000 8000 10000; do
+for step in 5000 10000 15000 20000; do
   export CHECKPOINT_PATH="$RUN_ROOT/checkpoints/checkpoint_step_${step}"
   export RESULT_LABEL="checkpoint_step_${step}"
   NGPU=4 bash script/run_robotwin_clean_checkpoint_eval.sh
@@ -1267,11 +1269,10 @@ $$
 
 ```text
 official model
-checkpoint_step_2000
-checkpoint_step_4000
-checkpoint_step_6000
-checkpoint_step_8000
+checkpoint_step_5000
 checkpoint_step_10000
+checkpoint_step_15000
+checkpoint_step_20000
 ```
 
 不要：
@@ -1338,13 +1339,7 @@ python -c "import torch; print(torch.cuda.device_count())"
 TARGET_GLOBAL_BATCH is not divisible by batch_size*NGPU
 ```
 
-优先选择 4/8/16/32/64 张 GPU，保持 global batch 64。确需其他数量时显式设置：
-
-```bash
-export GRADIENT_ACCUMULATION_STEPS=<整数>
-```
-
-并在报告中记录新的 global batch。
+使用 1/2/4/8/16/32/64 张 GPU，脚本会分别设置 64/32/16/8/4/2/1 的 accumulation，并始终保持 global batch 64。不要用 3、6、10 等不能整除 64 的 GPU 数启动这条正式协议；应调整可见 GPU 数，而不是改 global batch。
 
 ### 14.3 训练 attention mode 错
 
@@ -1427,9 +1422,9 @@ export LINGBOT_SWANLAB_MODE=offline
 8. 审计 Clean 50 tasks / 2500 episodes / latent
 9. 安装 RoboTwin、cuRobo、PyTorch3D 和仿真资产
 10. 运行官方模型 32x20 校准，必须 SR >= 85%
-11. 运行 Clean-only ZIP baseline 10K 训练
-12. 核验 2K/4K/6K/8K/10K 五个 checkpoint
-13. 训练停止后串行评测五个 checkpoint
+11. 运行 Clean-only ZIP baseline 20K 训练，global batch 固定 64
+12. 核验 5K/10K/15K/20K 四个 checkpoint
+13. 训练停止后串行评测四个 checkpoint
 14. 审计每轮 summary.json
 15. 汇总逐任务 SR、总 SR、墙钟、吞吐和 timing
 ```
@@ -1443,8 +1438,8 @@ nvidia-smi
 Clean dataset audit JSON
 官方模型 calibration summary.json
 训练 run_manifest.txt 和 train.log
-五个 checkpoint
-五轮 checkpoint evaluation summary.json
+四个 checkpoint
+四轮 checkpoint evaluation summary.json
 异常和恢复记录
 ```
 

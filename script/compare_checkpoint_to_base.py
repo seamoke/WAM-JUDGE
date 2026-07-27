@@ -32,7 +32,7 @@ def parse_args() -> argparse.Namespace:
     watch = subparsers.add_parser("watch")
     add_compare_args(watch)
     watch.add_argument("--checkpoint-root", required=True, type=Path)
-    watch.add_argument("--steps", default="2000,4000,6000,8000,10000")
+    watch.add_argument("--steps", default="5000,10000,15000,20000")
     watch.add_argument("--poll-seconds", type=int, default=60)
     watch.add_argument("--stable-polls", type=int, default=2)
     watch.add_argument("--retry-seconds", type=int, default=600)

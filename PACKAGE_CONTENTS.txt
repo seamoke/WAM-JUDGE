@@ -164,6 +164,7 @@ script/run_robotwin_clean_official_calibration.sh
 script/run_robotwin_clean_train_portable.sh
 script/run_robotwin_clean_zipbaseline_4xh100_10k.sh
 script/run_robotwin_clean_zipbaseline_4xh100_10k_with_delta_audit.sh
+script/run_robotwin_clean_zipbaseline_global64_20k_with_delta_audit.sh
 script/run_robotwin_eval.sh
 script/run_robotwin_eval_fast.sh
 script/run_robotwin_eval_pipeline.sh

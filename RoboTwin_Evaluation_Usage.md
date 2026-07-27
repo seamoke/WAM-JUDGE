@@ -9,7 +9,7 @@
 NGPU=8 bash script/run_robotwin_clean_official_calibration.sh
 
 # 第二步：只有官方 SR >= 85% 后才允许评测自有 checkpoint
-CHECKPOINT_PATH=/path/to/checkpoint_step_2000 \
+CHECKPOINT_PATH=/path/to/checkpoint_step_5000 \
 NGPU=8 \
 bash script/run_robotwin_clean_checkpoint_eval.sh
 ```
