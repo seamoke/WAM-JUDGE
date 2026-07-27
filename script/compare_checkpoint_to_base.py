@@ -20,6 +20,10 @@ from safetensors import safe_open
 
 
 WEIGHT_BASENAME = "diffusion_pytorch_model"
+DEFAULT_IGNORED_BASE_ONLY_KEYS = (
+    "patch_embedding.bias",
+    "patch_embedding.weight",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -45,6 +49,18 @@ def add_compare_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--max-chunk-elements", type=int, default=8_000_000)
     parser.add_argument("--top-k", type=int, default=100)
+    parser.add_argument(
+        "--ignore-base-only-keys",
+        default=",".join(DEFAULT_IGNORED_BASE_ONLY_KEYS),
+        help=(
+            "Comma-separated legacy base-only tensor keys excluded from the "
+            "effective model-key audit. Raw key differences remain in the report."
+        ),
+    )
+
+
+def parse_key_list(value: str) -> set[str]:
+    return {item.strip() for item in value.split(",") if item.strip()}
 
 
 def transformer_dir(path: Path) -> Path:
@@ -216,6 +232,7 @@ def compare_models(
     checkpoint_root: Path,
     max_chunk_elements: int,
     top_k: int,
+    ignored_base_only_keys: set[str] | None = None,
 ) -> dict[str, Any]:
     started = time.time()
     base_dir, base_map, base_files = build_weight_map(base_root)
@@ -225,7 +242,14 @@ def compare_models(
     base_keys = set(base_map)
     checkpoint_keys = set(checkpoint_map)
     common_keys = sorted(base_keys & checkpoint_keys)
-    missing_in_checkpoint = sorted(base_keys - checkpoint_keys)
+    raw_missing_in_checkpoint = base_keys - checkpoint_keys
+    ignored_base_only_keys = ignored_base_only_keys or set()
+    ignored_missing_in_checkpoint = sorted(
+        raw_missing_in_checkpoint & ignored_base_only_keys
+    )
+    missing_in_checkpoint = sorted(
+        raw_missing_in_checkpoint - ignored_base_only_keys
+    )
     unexpected_in_checkpoint = sorted(checkpoint_keys - base_keys)
     if not common_keys:
         raise ValueError("Base and checkpoint have no tensor keys in common")
@@ -288,10 +312,21 @@ def compare_models(
         ],
         "tensor_key_audit": {
             "base_count": len(base_keys),
+            "effective_base_count": (
+                len(base_keys) - len(ignored_missing_in_checkpoint)
+            ),
             "checkpoint_count": len(checkpoint_keys),
             "matched_count": len(common_keys),
+            "raw_missing_in_checkpoint": sorted(raw_missing_in_checkpoint),
+            "ignored_base_only_keys": ignored_missing_in_checkpoint,
             "missing_in_checkpoint": missing_in_checkpoint,
             "unexpected_in_checkpoint": unexpected_in_checkpoint,
+            "raw_exact_match": (
+                not raw_missing_in_checkpoint and not unexpected_in_checkpoint
+            ),
+            "effective_exact_match": (
+                not missing_in_checkpoint and not unexpected_in_checkpoint
+            ),
         },
         "overall": total.summary(),
         "module_groups": {
@@ -324,6 +359,10 @@ def write_result(result: dict[str, Any], output: Path) -> None:
         f"base={result['base']}",
         f"checkpoint={result['checkpoint']}",
         f"matched_tensors={result['tensor_key_audit']['matched_count']}",
+        f"raw_exact_match={result['tensor_key_audit']['raw_exact_match']}",
+        f"effective_exact_match={result['tensor_key_audit']['effective_exact_match']}",
+        "ignored_base_only_keys="
+        + ",".join(result["tensor_key_audit"]["ignored_base_only_keys"]),
         f"elements={overall['elements']}",
         f"changed_fraction={overall['changed_fraction']:.12g}",
         f"relative_l2_delta={overall['relative_l2_delta']:.12g}",
@@ -424,6 +463,7 @@ def watch(args: argparse.Namespace) -> int:
                     checkpoint,
                     args.max_chunk_elements,
                     args.top_k,
+                    parse_key_list(args.ignore_base_only_keys),
                 )
                 result["checkpoint_step"] = step
                 output = args.output / f"checkpoint_step_{step}_vs_base.json"
@@ -459,7 +499,11 @@ def main() -> int:
         if args.checkpoint is None:
             raise SystemExit("--checkpoint is required for compare")
         result = compare_models(
-            args.base, args.checkpoint, args.max_chunk_elements, args.top_k
+            args.base,
+            args.checkpoint,
+            args.max_chunk_elements,
+            args.top_k,
+            parse_key_list(args.ignore_base_only_keys),
         )
         write_result(result, args.output)
         print(json.dumps(result["overall"], indent=2, sort_keys=True))
