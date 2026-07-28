@@ -1,22 +1,10 @@
 #!/usr/bin/env python3
-"""Strictly audit a 32-task RoboTwin Easy/Clean evaluation."""
+"""Strictly audit a 50-task RoboTwin Easy/Clean evaluation."""
 
 import argparse
 import json
 import statistics
 from pathlib import Path
-
-
-DEFAULT_TASKS = (
-    "adjust_bottle,beat_block_hammer,click_alarmclock,click_bell,"
-    "dump_bin_bigbin,grab_roller,handover_mic,lift_pot,move_can_pot,"
-    "move_playingcard_away,move_stapler_pad,pick_diverse_bottles,"
-    "pick_dual_bottles,place_a2b_left,place_a2b_right,place_bread_skillet,"
-    "place_container_plate,place_dual_shoes,place_empty_cup,place_fan,"
-    "place_burger_fries,place_mouse_pad,place_object_scale,"
-    "place_object_stand,place_phone_stand,move_pillbottle_pad,place_shoe,"
-    "press_stapler,rotate_qrcode,scan_object,stamp_seal,turn_switch"
-)
 
 
 def parse_args():
@@ -25,7 +13,10 @@ def parse_args():
     parser.add_argument("--label", required=True)
     parser.add_argument("--seed-cache", type=Path, required=True)
     parser.add_argument("--episodes", type=int, default=20)
-    parser.add_argument("--tasks", default=DEFAULT_TASKS)
+    parser.add_argument(
+        "--tasks",
+        help="Comma-separated task list. Defaults to the ordered seed-cache tasks.",
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--min-sr", type=float)
     return parser.parse_args()
@@ -44,14 +35,19 @@ def percentile(values, q):
 
 def main():
     args = parse_args()
-    tasks = [task.strip() for task in args.tasks.split(",") if task.strip()]
-    if len(tasks) != 32 or len(set(tasks)) != 32:
-        raise SystemExit(f"Expected 32 unique tasks, got {len(tasks)}")
-
     cache_payload = json.loads(args.seed_cache.read_text(encoding="utf-8"))
     if cache_payload.get("task_config") != "demo_clean":
         raise SystemExit("Seed cache is not demo_clean")
     cache = cache_payload["tasks"]
+    tasks = (
+        [task.strip() for task in args.tasks.split(",") if task.strip()]
+        if args.tasks
+        else list(cache)
+    )
+    if len(tasks) != 50 or len(set(tasks)) != 50:
+        raise SystemExit(f"Expected 50 unique tasks, got {len(tasks)}")
+    if set(tasks) != set(cache):
+        raise SystemExit("Task list does not exactly match the 50-task seed cache")
 
     seed_root = (
         args.results_root
@@ -131,7 +127,7 @@ def main():
         json.dumps(summary, indent=2) + "\n", encoding="utf-8"
     )
     print(
-        f"AUDIT_OK tasks=32 episodes={total} successes={successes} "
+        f"AUDIT_OK tasks={len(tasks)} episodes={total} successes={successes} "
         f"sr={summary['sr']:.4f}"
     )
     if args.min_sr is not None and summary["sr"] < args.min_sr:

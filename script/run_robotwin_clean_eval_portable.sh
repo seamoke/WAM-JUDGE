@@ -9,21 +9,35 @@ MODEL_KIND="${MODEL_KIND:-official}"
 MODEL_PATH="${MODEL_PATH:-${OFFICIAL_MODEL}}"
 RESULT_LABEL="${RESULT_LABEL:-$(basename "${MODEL_PATH}")}"
 TEST_NUM="${TEST_NUM:-20}"
-SEED_CACHE="${SEED_CACHE:-${CODE_ROOT}/evaluation/robotwin/seed_cache/demo_clean_32tasks_seed0_n100.json}"
+SEED_CACHE="${SEED_CACHE:-${CODE_ROOT}/evaluation/robotwin/seed_cache/demo_clean_seed0_n100.json}"
 RT_DENOISER="${ROBOTWIN_RT_DENOISER:-optix}"
 NGPU="${NGPU:-$(nvidia-smi -L | wc -l | tr -d ' ')}"
 PROMPT_SERVICE_GPU="${PROMPT_SERVICE_GPU:-0}"
 PROMPT_SERVICE_PORT="${PROMPT_SERVICE_PORT:-31056}"
-RUN_ID="${RUN_ID:-robotwin_clean_${RESULT_LABEL}_n${TEST_NUM}_${NGPU}gpu_$(date +%Y%m%d_%H%M%S)}"
+RUN_ID="${RUN_ID:-robotwin_clean_${RESULT_LABEL}_t50_n${TEST_NUM}_${NGPU}gpu_$(date +%Y%m%d_%H%M%S)}"
 RUN_ROOT="${RUN_ROOT:-${LINGBOT_ROOT}/train_out/robotwin-clean-eval/${RUN_ID}}"
 LOG_DIR="${LOG_DIR:-${LINGBOT_ROOT}/logs/robotwin-clean-eval/${RUN_ID}}"
 RESULTS_ROOT="${RESULTS_ROOT:-${RUN_ROOT}/results}"
-PROMPT_CACHE="${PROMPT_CACHE:-${LINGBOT_ROOT}/train_out/robotwin/prompt_embed_cache/demo_clean_n${TEST_NUM}_all_seen}"
+PROMPT_CACHE="${PROMPT_CACHE:-${LINGBOT_ROOT}/train_out/robotwin/prompt_embed_cache/demo_clean_n${TEST_NUM}_all50}"
 EVAL_MODEL_CACHE="${EVAL_MODEL_CACHE:-${RUN_ROOT}/eval_models}"
 START_PORT="${START_PORT:-35056}"
 MASTER_PORT_BASE="${MASTER_PORT_BASE:-35161}"
 
-TASKS="adjust_bottle,beat_block_hammer,click_alarmclock,click_bell,dump_bin_bigbin,grab_roller,handover_mic,lift_pot,move_can_pot,move_playingcard_away,move_stapler_pad,pick_diverse_bottles,pick_dual_bottles,place_a2b_left,place_a2b_right,place_bread_skillet,place_container_plate,place_dual_shoes,place_empty_cup,place_fan,place_burger_fries,place_mouse_pad,place_object_scale,place_object_stand,place_phone_stand,move_pillbottle_pad,place_shoe,press_stapler,rotate_qrcode,scan_object,stamp_seal,turn_switch"
+TASKS="$(
+  python3 - "${SEED_CACHE}" <<'PY'
+import json
+import sys
+
+payload = json.load(open(sys.argv[1], encoding="utf-8"))
+tasks = list(payload.get("tasks", {}))
+if payload.get("task_config") != "demo_clean" or len(tasks) != 50:
+    raise SystemExit(
+        f"Expected the aligned 50-task demo_clean seed cache, got "
+        f"task_config={payload.get('task_config')!r}, tasks={len(tasks)}"
+    )
+print(",".join(tasks))
+PY
+)"
 
 if [[ "${TEST_NUM}" -ne 20 ]]; then
   echo "This aligned formal entry point requires TEST_NUM=20." >&2
@@ -66,8 +80,13 @@ if config.get("attn_mode") not in {"torch", "flashattn"}:
     raise SystemExit(f"Official eval model has invalid attn_mode={config.get('attn_mode')!r}")
 payload = json.load(open(seed_path, encoding="utf-8"))
 tasks = task_csv.split(",")
-if payload.get("task_config") != "demo_clean" or set(payload["tasks"]) != set(tasks):
-    raise SystemExit("Seed cache does not match the aligned 32-task demo_clean protocol")
+if (
+    payload.get("task_config") != "demo_clean"
+    or len(tasks) != 50
+    or len(set(tasks)) != 50
+    or set(payload["tasks"]) != set(tasks)
+):
+    raise SystemExit("Seed cache does not match the aligned 50-task demo_clean protocol")
 for task in tasks:
     rows = payload["tasks"][task]
     seeds = [int(row["seed"]) for row in rows[:20]]
@@ -85,7 +104,7 @@ payload = json.load(open(sys.argv[1], encoding="utf-8"))
 assert payload.get("complete")
 assert payload.get("task_config") == "demo_clean"
 assert int(payload.get("test_num", 0)) >= 20
-assert int(payload.get("tasks", 0)) == 32
+assert int(payload.get("tasks", 0)) == 50
 PY
 then
   mkdir -p "${PROMPT_CACHE}"
@@ -176,7 +195,7 @@ fi
   printf 'model_path=%s\n' "${MODEL_PATH}"
   printf 'result_label=%s\n' "${RESULT_LABEL}"
   printf 'task_config=demo_clean\n'
-  printf 'tasks=32\n'
+  printf 'tasks=50\n'
   printf 'episodes_per_task=20\n'
   printf 'ngpu=%s\n' "${NGPU}"
   printf 'rt_denoiser=%s\n' "${RT_DENOISER}"

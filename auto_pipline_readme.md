@@ -6,7 +6,7 @@
 2. 安装 LingBot-VA 训练环境和 RoboTwin 评测环境；
 3. 下载两个官方模型、完整 RoboTwin Clean+Aug 数据集和仿真资产；
 4. 审计 50 个 Clean 任务、2500 条轨迹及预计算 latent；
-5. 先用官方 RoboTwin 模型校准评测器，确认 32 任务成功率不低于 85%；
+5. 先用官方 RoboTwin 模型校准评测器，确认全部 50 个 Clean 任务成功率不低于 85%；
 6. 仅使用 Clean 数据从 `lingbot-va-base` 开始训练；
 7. 运行 20,000 optimizer steps，每 5,000 steps 保存 checkpoint；
 8. 用完全相同的协议评测 5K/10K/15K/20K checkpoint；
@@ -38,9 +38,11 @@ https://github.com/seamoke/WAM-JUDGE
 | 学习率 | `1e-5` |
 | scheduler | constant |
 | warmup | 10 optimizer steps |
-| 正式 Easy 评测 | 32 tasks x 20 episodes |
+| 正式 Easy 评测 | 50 tasks x 20 episodes（共 1000 episodes） |
 | 官方校准门槛 | `lingbot-va-posttrain-robotwin` 的 SR >= 85% |
 | 自有 checkpoint 评测 | 必须在官方校准通过后执行 |
+
+正式 Easy 评测覆盖的 50 个任务与 `lerobot_robotwin_eef_clean_50` 的训练任务集合一致，不再使用旧实验中的 32-task 子集。官方模型校准和所有自有 checkpoint 必须使用同一 50-task seed cache、同一任务顺序和相同的每任务 episode 数。
 
 这里的“step”是 optimizer step，不是单条轨迹，也不是单个 micro-batch。实际 global batch 为：
 
@@ -97,13 +99,13 @@ script/audit_robotwin_clean_eval.py
 [ ] 完整 Clean+Aug 数据已下载
 [ ] Clean 数据审计为 DATASET_AUDIT_OK
 [ ] RoboTwin Vulkan/RT 渲染检查通过
-[ ] 官方模型完成 32x20 且 SR >= 85%
+[ ] 官方模型完成 50x20 且 SR >= 85%
 [ ] 训练日志到达 20000/20000
 [ ] exit_code 内容为 0
 [ ] 日志包含 TRAIN_DONE rc=0
 [ ] 恰好存在 4 个目标 checkpoint
 [ ] 每个 checkpoint 的模型权重和 config.json 非空
-[ ] 每个自有 checkpoint 都使用同一 32x20 协议评测
+[ ] 每个自有 checkpoint 都使用同一 50x20 协议评测
 [ ] 每个 summary.json 均通过 seed/timing/res 严格审计
 ```
 
@@ -248,7 +250,7 @@ git status --short
 test -f auto_pipline_readme.md
 test -f script/run_robotwin_clean_train_portable.sh
 test -f script/run_robotwin_clean_official_calibration.sh
-test -f evaluation/robotwin/seed_cache/demo_clean_32tasks_seed0_n100.json
+test -f evaluation/robotwin/seed_cache/demo_clean_seed0_n100.json
 ```
 
 可选：核验发布源码清单。该清单不包含下载后的模型和数据：
@@ -710,9 +712,9 @@ test -d "$LINGBOT_ROOT/code/third_party/RoboTwin/assets/objects"
 
 ```text
 task_config=demo_clean
-32 tasks
+50 tasks
 20 episodes/task
-640 episodes total
+1000 episodes total
 deterministic audited seed cache
 RT CPG1
 RT_DENOISER=optix
@@ -733,14 +735,14 @@ no video
 固定 seed：
 
 ```text
-evaluation/robotwin/seed_cache/demo_clean_32tasks_seed0_n100.json
-SHA256=79df07987ad05a0ac99a23cccfc097e93f11a17d5841340ddb0499597fea97d4
+evaluation/robotwin/seed_cache/demo_clean_seed0_n100.json
+SHA256=4794de71cd3140d2a415c72e9a246a5c7373080d3ef72b430a873930d028926c
 ```
 
 核验：
 
 ```bash
-sha256sum evaluation/robotwin/seed_cache/demo_clean_32tasks_seed0_n100.json
+sha256sum evaluation/robotwin/seed_cache/demo_clean_seed0_n100.json
 ```
 
 ### 8.3 确认没有训练或旧评测
@@ -752,7 +754,7 @@ nvidia-smi
 
 正式评测前应停止训练；不要在同一批 GPU 上同时跑训练和评测。
 
-### 8.4 启动官方 32x20 校准
+### 8.4 启动官方 50x20 校准
 
 例如 4 卡：
 
@@ -802,7 +804,7 @@ SR >= 0.85
 $LINGBOT_ROOT/train_out/robotwin-clean-calibration/LATEST_PASSED
 ```
 
-参考校准结果：同一评测器 32x5 得到 `139/160 = 86.88%`。正式 32x20 结果允许有抽样波动，但必须达到脚本门槛 85%。
+旧的 32x5 校准结果 `139/160 = 86.88%` 只可作为历史排障参考，不能再作为当前协议的通过证据。正式校准必须完整运行 50x20；结果允许有抽样波动，但必须达到脚本门槛 85%。
 
 ### 8.6 低于 85% 时怎么办
 
@@ -820,7 +822,7 @@ rg -n "Traceback|CUDA out of memory|DeviceLost|AttributeError|timeout|no.progres
 1. 官方模型 `attn_mode` 是 `torch` 或 `flashattn`；
 2. `ROBOTWIN_RT_DENOISER=optix`；
 3. 固定 seed SHA 正确；
-4. 32 个任务完整；
+4. 50 个任务完整；
 5. assets 完整；
 6. 没有 `FAST=1`、`LOW_RENDER=1` 或 `RECREATE_CAMERAS_EVERY=1`；
 7. `place_object_scale` 修复存在；
@@ -1164,7 +1166,7 @@ done
 
 ```text
 训练已经停止
-官方 32x20 校准已通过
+官方 50x20 校准已通过
 LATEST_PASSED 指向有效 summary.json
 目标 checkpoint 已完整写入
 没有其他 RoboTwin 评测进程
@@ -1192,10 +1194,10 @@ bash script/run_robotwin_clean_checkpoint_eval.sh
 脚本会：
 
 1. 读取最近一次通过的官方校准 summary；
-2. 拒绝低于 85% 或非 32x20 的校准；
-3. 使用固定 32-task seed；
+2. 拒绝低于 85% 或非 50x20 的校准；
+3. 使用固定 50-task seed；
 4. 准备 checkpoint 的完整评测模型；
-5. 运行 32 tasks x 20 episodes；
+5. 运行 50 tasks x 20 episodes；
 6. 生成并严格审计 `summary.json`。
 
 也可显式指定校准：
@@ -1222,7 +1224,7 @@ done
 
 ### 11.4 summary.json 应包含
 
-- 32 个任务；
+- 50 个任务；
 - 每任务 20 episodes；
 - 每任务 success / total / SR；
 - 总 success、total 和 micro-average SR；
@@ -1237,8 +1239,8 @@ done
 $$
 \mathrm{SR}
 =
-\frac{\sum_{t=1}^{32}\mathrm{success}_t}
-{\sum_{t=1}^{32}\mathrm{episodes}_t}.
+\frac{\sum_{t=1}^{50}\mathrm{success}_t}
+{\sum_{t=1}^{50}\mathrm{episodes}_t}.
 $$
 
 完整评测定义、Easy/Hard 区别和断点恢复规则见 [`RoboTwin_Evaluation_Usage.md`](RoboTwin_Evaluation_Usage.md)。
@@ -1256,9 +1258,9 @@ $$
 | Steps | optimizer steps |
 | Global batch | batch/GPU x GPU x GA |
 | Scheduler | constant |
-| Official calibration SR | 同机官方模型 32x20 SR |
-| Checkpoint SR | 32x20 micro-average |
-| Per-task SR | 32 行 |
+| Official calibration SR | 同机官方模型 50x20 SR |
+| Checkpoint SR | 50x20 micro-average |
+| Per-task SR | 50 行 |
 | Wall time | 完整评测墙钟 |
 | Throughput | episodes/hour |
 | Timing | mean / median / P95 |
@@ -1421,7 +1423,7 @@ export LINGBOT_SWANLAB_MODE=offline
 7. 下载完整 robotwin-clean-and-aug-lerobot
 8. 审计 Clean 50 tasks / 2500 episodes / latent
 9. 安装 RoboTwin、cuRobo、PyTorch3D 和仿真资产
-10. 运行官方模型 32x20 校准，必须 SR >= 85%
+10. 运行官方模型 50x20 校准，必须 SR >= 85%
 11. 运行 Clean-only ZIP baseline 20K 训练，global batch 固定 64
 12. 核验 5K/10K/15K/20K 四个 checkpoint
 13. 训练停止后串行评测四个 checkpoint

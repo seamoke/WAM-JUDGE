@@ -20,8 +20,8 @@ import json
 import sys
 
 summary = json.load(open(sys.argv[1], encoding="utf-8"))
-if int(summary["tasks"]) != 32 or int(summary["episodes_per_task"]) != 20:
-    raise SystemExit("Calibration protocol is not 32 tasks x 20 episodes")
+if int(summary["tasks"]) != 50 or int(summary["episodes_per_task"]) != 20:
+    raise SystemExit("Calibration protocol is not 50 tasks x 20 episodes")
 if float(summary["sr"]) < 0.85:
     raise SystemExit(f"Calibration SR {summary['sr']:.4f} is below 0.85")
 print(f"Calibration gate accepted: SR={summary['sr']:.4f}")

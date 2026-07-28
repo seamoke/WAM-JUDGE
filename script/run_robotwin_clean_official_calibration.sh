@@ -4,7 +4,7 @@ set -euo pipefail
 CODE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LINGBOT_ROOT="${LINGBOT_ROOT:-$(dirname "${CODE_ROOT}")}"
 OFFICIAL_MODEL="${OFFICIAL_MODEL:-${LINGBOT_ROOT}/models/lingbot-va-posttrain-robotwin}"
-RUN_ID="${RUN_ID:-robotwin_clean_official_calibration_n20_$(date +%Y%m%d_%H%M%S)}"
+RUN_ID="${RUN_ID:-robotwin_clean_official_calibration_t50_n20_$(date +%Y%m%d_%H%M%S)}"
 RUN_ROOT="${RUN_ROOT:-${LINGBOT_ROOT}/train_out/robotwin-clean-calibration/${RUN_ID}}"
 
 MODEL_KIND=official \

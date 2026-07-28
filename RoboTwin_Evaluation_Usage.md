@@ -5,7 +5,7 @@
 本代码快照只把 Easy/Clean 作为当前训练与 checkpoint 对比主线。推荐入口：
 
 ```bash
-# 第一步：官方模型 32 tasks x 20 episodes 校准
+# 第一步：官方模型 50 tasks x 20 episodes 校准
 NGPU=8 bash script/run_robotwin_clean_official_calibration.sh
 
 # 第二步：只有官方 SR >= 85% 后才允许评测自有 checkpoint
@@ -153,7 +153,7 @@ sha256sum /workspace/lingbot-va/train_out/robotwin-short-3gpu/checkpoints/checkp
 | Easy/Clean | `demo_clean` | 标准、清洁场景 |
 | Hard/Aug | `demo_randomized` | 光照、材质、背景、物体等随机化场景 |
 
-二者使用同一套 32 个任务，但初始状态和视觉随机化不同。禁止将 Easy 与 Hard 的 episode 混合计算成一个成功率。
+二者使用同一套 50 个任务，但初始状态和视觉随机化不同。禁止将 Easy 与 Hard 的 episode 混合计算成一个成功率。
 
 ## 7. 固定种子
 
@@ -182,7 +182,7 @@ SHA256=4704731001e5890b677fb5f4f8d7da8e54502ba156d25c09812f677e5305139f
 推荐固定参数：
 
 ```text
-32 tasks
+50 tasks
 CLIENTS_PER_GPU=1
 EXPERT_CHECK=1
 FAST=0
@@ -315,7 +315,7 @@ RUN_ID 中建议包含：
 
 每个 Easy/Hard RUN_ID 都要检查：
 
-1. 恰好 32 个任务。
+1. 恰好 50 个任务。
 2. 每任务恰好 10 或 20 episodes。
 3. timing episode 连续为 `1..N`。
 4. seed 无重复、无乱序。
@@ -329,11 +329,11 @@ RUN_ID 中建议包含：
 
 $$
 \mathrm{SR} =
-\frac{\sum_{t=1}^{32}\mathrm{success}_t}
-{\sum_{t=1}^{32}\mathrm{episodes}_t}
+\frac{\sum_{t=1}^{50}\mathrm{success}_t}
+{\sum_{t=1}^{50}\mathrm{episodes}_t}
 $$
 
-当每个任务 episode 数相同，它也等于 32 个任务成功率的算术平均值。
+当每个任务 episode 数相同，它也等于 50 个任务成功率的算术平均值。
 
 ## 14. 每轮实验应输出的报告
 
@@ -345,7 +345,7 @@ $$
 - Base model 与 checkpoint 路径、step、SHA256；
 - Easy/Hard seed cache SHA256；
 - 完整协议参数；
-- 32 个任务各自的成功数、总数和 SR；
+- 50 个任务各自的成功数、总数和 SR；
 - 总 SR；
 - 总墙钟时间和吞吐；
 - episode timing 的 mean、median、P95；
@@ -356,7 +356,7 @@ $$
 
 ```text
 [ ] 代码和评测修复已同步
-[ ] RoboTwin 32任务及全部资产可访问
+[ ] RoboTwin 50任务及全部资产可访问
 [ ] Base model 和新 checkpoint 可加载
 [ ] checkpoint 路径及SHA已记录
 [ ] Easy/Hard seed cache SHA正确
