@@ -3,7 +3,7 @@
 > **This snapshot includes our complete clean-only RoboTwin training and aligned
 > evaluation code.** Start with
 > [`auto_pipline_readme.md`](auto_pipline_readme.md). The required first step is
-> a 32-task x 20-episode evaluation of the official post-trained model. Do not
+> a 50-task x 10-episode evaluation of the official post-trained model. Do not
 > evaluate custom checkpoints unless that calibration reaches at least 85% SR.
 > The aligned clean-only baseline trains for 20,000 optimizer steps with a
 > fixed global batch of 64 and saves at 5K/10K/15K/20K.

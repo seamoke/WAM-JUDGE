@@ -4,13 +4,13 @@ set -euo pipefail
 CODE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LINGBOT_ROOT="${LINGBOT_ROOT:-$(dirname "${CODE_ROOT}")}"
 OFFICIAL_MODEL="${OFFICIAL_MODEL:-${LINGBOT_ROOT}/models/lingbot-va-posttrain-robotwin}"
-RUN_ID="${RUN_ID:-robotwin_clean_official_calibration_n20_$(date +%Y%m%d_%H%M%S)}"
+RUN_ID="${RUN_ID:-robotwin_clean_official_calibration_t50_n10_$(date +%Y%m%d_%H%M%S)}"
 RUN_ROOT="${RUN_ROOT:-${LINGBOT_ROOT}/train_out/robotwin-clean-calibration/${RUN_ID}}"
 
 MODEL_KIND=official \
 MODEL_PATH="${OFFICIAL_MODEL}" \
 RESULT_LABEL=lingbot-va-posttrain-robotwin \
-TEST_NUM=20 \
+TEST_NUM=10 \
 RUN_ID="${RUN_ID}" \
 RUN_ROOT="${RUN_ROOT}" \
   bash "${CODE_ROOT}/script/run_robotwin_clean_eval_portable.sh"
