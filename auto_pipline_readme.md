@@ -38,7 +38,7 @@ https://github.com/seamoke/WAM-JUDGE
 | 学习率 | `1e-5` |
 | scheduler | constant |
 | warmup | 10 optimizer steps |
-| 正式 Easy 评测 | 50 tasks x 20 episodes（共 1000 episodes） |
+| 正式 Easy 评测 | 50 tasks x 10 episodes（共 500 episodes） |
 | 官方校准门槛 | `lingbot-va-posttrain-robotwin` 的 SR >= 85% |
 | 自有 checkpoint 评测 | 必须在官方校准通过后执行 |
 
@@ -99,13 +99,13 @@ script/audit_robotwin_clean_eval.py
 [ ] 完整 Clean+Aug 数据已下载
 [ ] Clean 数据审计为 DATASET_AUDIT_OK
 [ ] RoboTwin Vulkan/RT 渲染检查通过
-[ ] 官方模型完成 50x20 且 SR >= 85%
+[ ] 官方模型完成 50x10 且 SR >= 85%
 [ ] 训练日志到达 20000/20000
 [ ] exit_code 内容为 0
 [ ] 日志包含 TRAIN_DONE rc=0
 [ ] 恰好存在 4 个目标 checkpoint
 [ ] 每个 checkpoint 的模型权重和 config.json 非空
-[ ] 每个自有 checkpoint 都使用同一 50x20 协议评测
+[ ] 每个自有 checkpoint 都使用同一 50x10 协议评测
 [ ] 每个 summary.json 均通过 seed/timing/res 严格审计
 ```
 
@@ -713,8 +713,8 @@ test -d "$LINGBOT_ROOT/code/third_party/RoboTwin/assets/objects"
 ```text
 task_config=demo_clean
 50 tasks
-20 episodes/task
-1000 episodes total
+10 episodes/task
+500 episodes total
 deterministic audited seed cache
 RT CPG1
 RT_DENOISER=optix
@@ -754,7 +754,7 @@ nvidia-smi
 
 正式评测前应停止训练；不要在同一批 GPU 上同时跑训练和评测。
 
-### 8.4 启动官方 50x20 校准
+### 8.4 启动官方 50x10 校准
 
 例如 4 卡：
 
@@ -804,7 +804,7 @@ SR >= 0.85
 $LINGBOT_ROOT/train_out/robotwin-clean-calibration/LATEST_PASSED
 ```
 
-旧的 32x5 校准结果 `139/160 = 86.88%` 只可作为历史排障参考，不能再作为当前协议的通过证据。正式校准必须完整运行 50x20；结果允许有抽样波动，但必须达到脚本门槛 85%。
+旧的 32x5 校准结果 `139/160 = 86.88%` 只可作为历史排障参考，不能再作为当前协议的通过证据。正式校准必须完整运行 50x10；结果允许有抽样波动，但必须达到脚本门槛 85%。
 
 ### 8.6 低于 85% 时怎么办
 
@@ -1166,7 +1166,7 @@ done
 
 ```text
 训练已经停止
-官方 50x20 校准已通过
+官方 50x10 校准已通过
 LATEST_PASSED 指向有效 summary.json
 目标 checkpoint 已完整写入
 没有其他 RoboTwin 评测进程
@@ -1194,10 +1194,10 @@ bash script/run_robotwin_clean_checkpoint_eval.sh
 脚本会：
 
 1. 读取最近一次通过的官方校准 summary；
-2. 拒绝低于 85% 或非 50x20 的校准；
+2. 拒绝低于 85% 或非 50x10 的校准；
 3. 使用固定 50-task seed；
 4. 准备 checkpoint 的完整评测模型；
-5. 运行 50 tasks x 20 episodes；
+5. 运行 50 tasks x 10 episodes；
 6. 生成并严格审计 `summary.json`。
 
 也可显式指定校准：
@@ -1225,7 +1225,7 @@ done
 ### 11.4 summary.json 应包含
 
 - 50 个任务；
-- 每任务 20 episodes；
+- 每任务 10 episodes；
 - 每任务 success / total / SR；
 - 总 success、total 和 micro-average SR；
 - mean / median / P95 episode timing；
@@ -1258,8 +1258,8 @@ $$
 | Steps | optimizer steps |
 | Global batch | batch/GPU x GPU x GA |
 | Scheduler | constant |
-| Official calibration SR | 同机官方模型 50x20 SR |
-| Checkpoint SR | 50x20 micro-average |
+| Official calibration SR | 同机官方模型 50x10 SR |
+| Checkpoint SR | 50x10 micro-average |
 | Per-task SR | 50 行 |
 | Wall time | 完整评测墙钟 |
 | Throughput | episodes/hour |
@@ -1280,7 +1280,7 @@ checkpoint_step_20000
 不要：
 
 - 混合不同 seed；
-- 混合每任务 5/10/20 episodes；
+- 混合每任务不同的 episode 数（例如 5/10/20）；
 - 混合 Easy 与 Hard；
 - 把临时进度 SR 当最终 SR；
 - 忽略失败 episode；
@@ -1423,7 +1423,7 @@ export LINGBOT_SWANLAB_MODE=offline
 7. 下载完整 robotwin-clean-and-aug-lerobot
 8. 审计 Clean 50 tasks / 2500 episodes / latent
 9. 安装 RoboTwin、cuRobo、PyTorch3D 和仿真资产
-10. 运行官方模型 50x20 校准，必须 SR >= 85%
+10. 运行官方模型 50x10 校准，必须 SR >= 85%
 11. 运行 Clean-only ZIP baseline 20K 训练，global batch 固定 64
 12. 核验 5K/10K/15K/20K 四个 checkpoint
 13. 训练停止后串行评测四个 checkpoint

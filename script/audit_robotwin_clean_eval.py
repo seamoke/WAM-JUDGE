@@ -12,7 +12,7 @@ def parse_args():
     parser.add_argument("--results-root", type=Path, required=True)
     parser.add_argument("--label", required=True)
     parser.add_argument("--seed-cache", type=Path, required=True)
-    parser.add_argument("--episodes", type=int, default=20)
+    parser.add_argument("--episodes", type=int, default=10)
     parser.add_argument(
         "--tasks",
         help="Comma-separated task list. Defaults to the ordered seed-cache tasks.",

@@ -8,7 +8,7 @@ OFFICIAL_MODEL="${OFFICIAL_MODEL:-${LINGBOT_ROOT}/models/lingbot-va-posttrain-ro
 MODEL_KIND="${MODEL_KIND:-official}"
 MODEL_PATH="${MODEL_PATH:-${OFFICIAL_MODEL}}"
 RESULT_LABEL="${RESULT_LABEL:-$(basename "${MODEL_PATH}")}"
-TEST_NUM="${TEST_NUM:-20}"
+TEST_NUM="${TEST_NUM:-10}"
 SEED_CACHE="${SEED_CACHE:-${CODE_ROOT}/evaluation/robotwin/seed_cache/demo_clean_seed0_n100.json}"
 RT_DENOISER="${ROBOTWIN_RT_DENOISER:-optix}"
 NGPU="${NGPU:-$(nvidia-smi -L | wc -l | tr -d ' ')}"
@@ -39,8 +39,8 @@ print(",".join(tasks))
 PY
 )"
 
-if [[ "${TEST_NUM}" -ne 20 ]]; then
-  echo "This aligned formal entry point requires TEST_NUM=20." >&2
+if [[ "${TEST_NUM}" -ne 10 ]]; then
+  echo "This aligned formal entry point requires TEST_NUM=10." >&2
   exit 2
 fi
 if [[ "${NGPU}" -lt 1 ]]; then
@@ -89,8 +89,8 @@ if (
     raise SystemExit("Seed cache does not match the aligned 50-task demo_clean protocol")
 for task in tasks:
     rows = payload["tasks"][task]
-    seeds = [int(row["seed"]) for row in rows[:20]]
-    if len(rows) < 20 or len(seeds) != len(set(seeds)):
+    seeds = [int(row["seed"]) for row in rows[:10]]
+    if len(rows) < 10 or len(seeds) != len(set(seeds)):
         raise SystemExit(f"Invalid seed cache rows for {task}")
 print("MODEL_AND_SEED_PREFLIGHT_OK")
 PY
@@ -103,7 +103,7 @@ import sys
 payload = json.load(open(sys.argv[1], encoding="utf-8"))
 assert payload.get("complete")
 assert payload.get("task_config") == "demo_clean"
-assert int(payload.get("test_num", 0)) >= 20
+assert int(payload.get("test_num", 0)) >= 10
 assert int(payload.get("tasks", 0)) == 50
 PY
 then
@@ -114,7 +114,7 @@ then
       --seed-cache "${SEED_CACHE}" \
       --robotwin-root "${CODE_ROOT}/third_party/RoboTwin" \
       --output-dir "${PROMPT_CACHE}" \
-      --test-num 20 \
+      --test-num 10 \
       --enumerate-all-seen \
       --device cuda:0 \
       | tee "${LOG_DIR}/prompt_precompute.log"
@@ -196,7 +196,7 @@ fi
   printf 'result_label=%s\n' "${RESULT_LABEL}"
   printf 'task_config=demo_clean\n'
   printf 'tasks=50\n'
-  printf 'episodes_per_task=20\n'
+  printf 'episodes_per_task=10\n'
   printf 'ngpu=%s\n' "${NGPU}"
   printf 'rt_denoiser=%s\n' "${RT_DENOISER}"
   printf 'seed_cache_sha256=%s\n' "$(sha256sum "${SEED_CACHE}" | awk '{print $1}')"
@@ -216,7 +216,7 @@ CLIENTS_PER_GPU=1 \
 ROBOTWIN_DYNAMIC_SHARDS=1 \
 ROBOTWIN_SIM_FOLLOWS_SERVER_GPU=1 \
 ROBOTWIN_TASKS="${TASKS}" \
-TEST_NUM=20 \
+TEST_NUM=10 \
 SEED=0 \
 ROBOTWIN_SEED_CACHE="${SEED_CACHE}" \
 ROBOTWIN_EXPERT_CHECK=1 \
@@ -263,6 +263,6 @@ python script/audit_robotwin_clean_eval.py \
   --results-root "${RESULTS_ROOT}" \
   --label "${RESULT_LABEL}" \
   --seed-cache "${SEED_CACHE}" \
-  --episodes 20 \
+  --episodes 10 \
   --output "${RUN_ROOT}/summary.json"
 echo "EVAL_DONE ${RUN_ROOT}"

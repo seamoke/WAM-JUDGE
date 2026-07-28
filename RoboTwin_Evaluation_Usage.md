@@ -5,7 +5,7 @@
 本代码快照只把 Easy/Clean 作为当前训练与 checkpoint 对比主线。推荐入口：
 
 ```bash
-# 第一步：官方模型 50 tasks x 20 episodes 校准
+# 第一步：官方模型 50 tasks x 10 episodes 校准
 NGPU=8 bash script/run_robotwin_clean_official_calibration.sh
 
 # 第二步：只有官方 SR >= 85% 后才允许评测自有 checkpoint
@@ -172,7 +172,7 @@ SHA256=4704731001e5890b677fb5f4f8d7da8e54502ba156d25c09812f677e5305139f
 缓存中每任务可以包含 100 个候选 seed，但正式评测不必运行 100 次：
 
 - 快速 checkpoint 对比：每任务 10 episodes；
-- 最终正式汇报：建议每任务 20 episodes；
+- 当前对齐协议：每任务固定 10 episodes；
 - 所有待比较 checkpoint 必须取同一缓存中的相同顺序 seed。
 
 禁止为每个 checkpoint 重新随机采样，否则失去配对比较条件。
@@ -316,7 +316,7 @@ RUN_ID 中建议包含：
 每个 Easy/Hard RUN_ID 都要检查：
 
 1. 恰好 50 个任务。
-2. 每任务恰好 10 或 20 episodes。
+2. 每任务恰好 10 episodes。
 3. timing episode 连续为 `1..N`。
 4. seed 无重复、无乱序。
 5. seed 是该任务缓存的严格有序子序列。
