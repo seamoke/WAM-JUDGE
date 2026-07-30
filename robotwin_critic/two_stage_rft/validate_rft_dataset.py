@@ -117,10 +117,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset-root", type=Path, required=True)
     parser.add_argument("--with-loader", action="store_true")
+    parser.add_argument(
+        "--loader-only",
+        action="store_true",
+        help="Skip rft_manifest structural checks and validate every repo via loader.",
+    )
     parser.add_argument("--max-items", type=int, default=4)
     args = parser.parse_args()
-    result = {"structural": structural_validate(args.dataset_root)}
-    if args.with_loader:
+    result = {}
+    if not args.loader_only:
+        result["structural"] = structural_validate(args.dataset_root)
+    if args.with_loader or args.loader_only:
         result["unchanged_wam_loader"] = loader_validate(
             args.dataset_root, args.max_items
         )

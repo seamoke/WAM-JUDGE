@@ -13,7 +13,10 @@ robotwin_critic/two_stage_rft/
 script/robotwin_two_stage_vlac_prepare.sh
 script/robotwin_two_stage_vlac_train.sh
 script/robotwin_action_critic_calibrate.sh
+script/robotwin_action_critic_eval.sh
 script/robotwin_build_chunk_rft_dataset.sh
+script/robotwin_build_mixed_rft_view.sh
+script/run_robotwin_chunk_rft_portable.sh
 ```
 
 现有 `wan_va/train.py`、`wan_va/wan_va_server.py` 和 RoboTwin 评测入口均未修改。
@@ -278,8 +281,59 @@ OUTPUT_ROOT=/path/to/new-rft-dataset \
 bash script/robotwin_build_chunk_rft_dataset.sh
 ```
 
-训练时只需让原训练脚本读取新 root。为避免灾难性遗忘，正式 RFT 建议按固定比例混合
-Stage 1 真实数据与 RFT 数据，而不是只训练生成数据。
+### 5.1 构造 Stage 1 + RFT 混合视图
+
+正式 RFT 不直接只训练生成数据。先构造不可变混合 view：
+
+```bash
+export RFT_DATA_ROOT=/path/to/new-rft-dataset
+export MIXED_DATA_ROOT=/path/to/new-stage1-rft-mixed-view
+export RFT_TARGET_FRACTION=0.25
+
+bash script/robotwin_build_mixed_rft_view.sh
+```
+
+该 view 不复制大文件：
+
+- 每个 source repository 创建独立、极小的 metadata wrapper；
+- `data/latents/videos` 使用相对软链接；
+- Stage 1 与 RFT 都由原 recursive dataset discovery 找到；
+- 根据 `action_config` item 数，而不是 episode 数，计算 RFT 采样占比；
+- 必要时重复暴露同一 RFT repository 来接近目标占比；
+- 写出 `mixed_view_manifest.json`，记录真实 item 数、重复次数和两个源 manifest SHA。
+
+默认目标 RFT 占比为 25%。由于 repository repetition 是整数，manifest 同时记录
+`requested_rft_fraction` 和实际的 `effective_rft_fraction`。
+
+### 5.2 从 Stage 1 checkpoint 做 chunk RFT
+
+```bash
+export STAGE1_CHECKPOINT="$LINGBOT_ROOT/train_out/robotwin/<stage1-run>/checkpoints/checkpoint_step_15000"
+export MIXED_DATA_ROOT=/path/to/new-stage1-rft-mixed-view
+
+# 只检查 checkpoint、manifest 和原 loader，不启动 GPU
+VALIDATE_ONLY=1 bash script/run_robotwin_chunk_rft_portable.sh
+
+# 正式启动；初始协议为 3000 optimizer steps，每 1000 steps 保存
+bash script/run_robotwin_chunk_rft_portable.sh
+```
+
+正式入口复用原 `run_robotwin_clean_train_portable.sh`，只改变：
+
+```text
+initial model = Stage 1 checkpoint_step_15000
+dataset = immutable Stage 1 + selected chunk RFT mixed view
+train stage = stage2_chunk_rft
+optimizer steps = 3000
+save steps = 1000,2000,3000
+global batch = 64
+```
+
+这是第一版对齐协议，不声称 25% 或 3000 steps 已最优。后续 ablation 应固定其他变量，
+比较 RFT fraction、RFT steps 和 reward 组合。由于每个生成 chunk 被物化成一个短
+`action_config` segment，训练仍走原 loader、action 对齐、temporal packing 和
+video/action loss；与长轨迹训练的差别只在跨 segment 历史被重置，因此必须保留
+Stage 1 真实轨迹混合，避免上下文分布全部变成短片段。
 
 ## 6. 必做实验
 
@@ -304,3 +358,53 @@ optimizer steps 和评测协议。
 - 候选通过率和有效 RFT chunk 数；
 - RFT 相对 Base-30 的成功率提升；
 - 同等 action 标注量和同等训练 compute 下的提升。
+
+## 7. 当前代码验证记录
+
+本次实现只做 smoke，不启动正式训练。H100 隔离 worktree 中已完成：
+
+```text
+robotwin_critic/two_stage_rft unit tests: 8 passed
+shell syntax checks: passed
+git diff whitespace check: passed
+```
+
+真实 RoboTwin segment smoke：
+
+```text
+source segment frames: 74
+frame stride: 4
+packed latent frames: 5
+loader latent shape: [48, 5, 24, 20]
+loader action shape: [30, 5, 16, 1]
+loader action-mask shape: [30, 5, 16, 1]
+```
+
+真实混合 view smoke：
+
+```text
+Stage 1 items: 50
+RFT items: 1
+loader discovered total items: 51
+one Stage 1 and one RFT sample were both loaded successfully
+```
+
+训练 wrapper：
+
+```text
+VALIDATE_ONLY=1 passed
+initial checkpoint files verified
+mixed manifest verified
+RFT steps: 3000
+save steps: 1000,2000,3000
+```
+
+VLAC 4-GPU smoke 已验证 torch distributed 4-rank 启动，但 110 秒窗口内仍处于
+VLAC-2B 模型加载，未进入 optimizer step；超时后所有 rank 均由 timeout 回收，
+四张 H100 恢复为 0 MiB 且无残留进程。正式接手者应在允许超过 120 秒的窗口中执行：
+
+```bash
+bash script/robotwin_two_stage_vlac_train.sh smoke
+```
+
+只有该 10-step smoke 完成并通过既有 VOC/VROC 数值输出 gates 后，才启动 full VLAC。
