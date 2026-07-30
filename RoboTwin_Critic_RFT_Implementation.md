@@ -108,6 +108,9 @@ bash script/robotwin_two_stage_vlac_train.sh full
 ```
 
 准备脚本可重复使用已经完整下载的模型；只有 `config.json` 不存在时才下载。
+smoke 训练完成后，脚本默认把不含 optimizer state 的 eval-only checkpoint 暂存到
+`/tmp/robotwin-vlac-eval`，再执行 VOC/VROC 评测，避免共享盘二次加载权重。可通过
+`LOCAL_EVAL_MODEL_ROOT` 改变路径；设为空字符串可关闭本地暂存。
 
 ## 3. 解析式 Action Critic
 
@@ -399,12 +402,54 @@ RFT steps: 3000
 save steps: 1000,2000,3000
 ```
 
-VLAC 4-GPU smoke 已验证 torch distributed 4-rank 启动，但 110 秒窗口内仍处于
-VLAC-2B 模型加载，未进入 optimizer step；超时后所有 rank 均由 timeout 回收，
-四张 H100 恢复为 0 MiB 且无残留进程。正式接手者应在允许超过 120 秒的窗口中执行：
+2026-07-30 在 4 张 H100 上完成了 VLAC-2B 全参数 10-step smoke。使用
+`smoke_2task` 的 512 个 train pair 和 96 个 validation pair，结果为：
 
-```bash
-bash script/robotwin_two_stage_vlac_train.sh smoke
+```text
+train steps: 10/10
+train loss: 3.5114
+final validation loss: 1.8333
+final validation token accuracy: 0.4289
+peak memory: 25.76 GiB/GPU
+checkpoint: checkpoint-10
 ```
 
-只有该 10-step smoke 完成并通过既有 VOC/VROC 数值输出 gates 后，才启动 full VLAC。
+首步 loss 为 8.2002，后五步单步 loss 约为 1.68--2.16，说明 forward、backward、
+四卡 DDP、validation 和全参数 checkpoint 保存链路均已跑通。checkpoint 包含
+4.41 GB 模型权重和 8.82 GB optimizer state。
+
+直接从共享盘加载 checkpoint 的单卡 `evaluate_vlac` 在 15 分钟窗口内未进入 CUDA。
+将不含 optimizer state 的 4.2 GB eval-only checkpoint 暂存到节点本地 `/tmp` 后，
+同一评测成功完成：
+
+| Metric | VLAC-2B baseline | 10-step full FT |
+|---|---:|---:|
+| Numeric parse rate | 1.0000 | 1.0000 |
+| Pair MAE | 34.1024 | 39.2701 |
+| Pair sign accuracy | 0.4219 | 0.5781 |
+| Pair macro-F1 | 0.3333 | 0.3678 |
+| Pair macro OVR-AUC | 0.6109 | 0.5646 |
+| Pair target Spearman | 0.0516 | -0.2451 |
+| Mean VOC | 0.6078 | -0.2431 |
+| Mean VROC | 0.3700 | 0.9059 |
+| Mean antisymmetry MAE | 4.4848 | 2.4515 |
+
+评测规模为 64 pairs 和 3 trajectories。四项运行门槛全部通过：
+
+```text
+rgb_manifest_nonempty: true
+numeric_output_ok: true
+voc_finite: true
+vroc_finite: true
+smoke_passed: true
+```
+
+这组结果只证明 RGB 输入、数值输出、全参数训练、checkpoint 重载和 VOC/VROC
+计算链路可用，不证明 10-step critic 已经可部署。虽然 sign accuracy 和
+antisymmetry 改善，但 MAE、AUC、Spearman 和 VOC 退化，说明极短 smoke 已偏向局部
+标签分布。正式结论必须来自 full 训练后的未见 simulator seed、场景扰动或 task split，
+并与未微调 VLAC 在同一评测清单上比较。
+
+旁路训练入口现在会在 `finally` 中显式销毁已初始化的 NCCL process group，降低
+多 rank 退出时残留的风险。训练和评测结束后均已确认四张 H100 为 0 MiB，且无残留
+训练或评测进程。

@@ -10,6 +10,12 @@ export OUTPUT_DIR="${OUTPUT_DIR:-$CRITIC_ROOT/vlac_finetune/two_stage_${MODE}_fu
 export MODEL_PATH="${MODEL_PATH:-$CRITIC_ROOT/models/VLAC-2B}"
 export PROJECT_ROOT LINGBOT_ROOT CRITIC_ROOT
 
+# Full checkpoints live on shared storage. Staging only inference files on the
+# node-local disk avoids a second slow shared-filesystem model load.
+if [[ "$MODE" == "smoke" ]]; then
+  export LOCAL_EVAL_MODEL_ROOT="${LOCAL_EVAL_MODEL_ROOT-/tmp/robotwin-vlac-eval}"
+fi
+
 # The reused trainer is deliberately full-parameter: --train_type full,
 # freeze_vit=false, and freeze_aligner=false. No LoRA adapter is involved.
 exec "$PROJECT_ROOT/script/robotwin_vlac_train_4xh100.sh" "$MODE"

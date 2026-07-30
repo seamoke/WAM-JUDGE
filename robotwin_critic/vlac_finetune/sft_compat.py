@@ -55,11 +55,26 @@ def install_compatibility_patch() -> None:
         )
 
 
+def destroy_distributed_process_group(dist_module=None) -> bool:
+    """Close an initialized torch process group before each rank exits."""
+
+    if dist_module is None:
+        import torch.distributed as dist_module
+
+    if not dist_module.is_available() or not dist_module.is_initialized():
+        return False
+    dist_module.destroy_process_group()
+    return True
+
+
 def main() -> None:
     install_compatibility_patch()
     from swift.llm import sft_main
 
-    sft_main()
+    try:
+        sft_main()
+    finally:
+        destroy_distributed_process_group()
 
 
 if __name__ == "__main__":
