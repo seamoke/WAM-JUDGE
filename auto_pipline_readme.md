@@ -6,11 +6,12 @@
 2. 安装 LingBot-VA 训练环境和 RoboTwin 评测环境；
 3. 下载两个官方模型、完整 RoboTwin Clean+Aug 数据集和仿真资产；
 4. 审计 50 个 Clean 任务、2500 条轨迹及预计算 latent；
-5. 先用官方 RoboTwin 模型校准评测器，确认全部 50 个 Clean 任务成功率不低于 85%；
-6. 仅使用 Clean 数据从 `lingbot-va-base` 开始训练；
-7. 运行 20,000 optimizer steps，每 5,000 steps 保存 checkpoint；
-8. 用完全相同的协议评测 5K/10K/15K/20K checkpoint；
-9. 审计每个任务的成功率、seed、timing、墙钟时间和异常恢复记录。
+5. 一次性把每个 task 的 Clean 50 条和 Randomized/Aug 50 条固定划分为 Stage 1 的 30+30 与 Stage 2 的 20+20；
+6. 先用官方 RoboTwin 模型校准评测器，确认全部 50 个 Clean 任务成功率不低于 85%；
+7. 使用 Stage 1 的 Clean+Randomized 数据从 `lingbot-va-base` 开始训练；
+8. 运行 15,000 optimizer steps，每 3,000 steps 保存 checkpoint；
+9. 用完全相同的协议评测 3K/6K/9K/12K/15K checkpoint；
+10. 审计每个任务的成功率、seed、timing、墙钟时间和异常恢复记录。
 
 仓库地址：
 
@@ -29,10 +30,11 @@ https://github.com/seamoke/WAM-JUDGE
 | 项目 | 固定设置 |
 |---|---|
 | 训练初始化 | `Robbyant/lingbot-va-base` |
-| 训练数据 | 只使用 `lerobot_robotwin_eef_clean_50` |
+| 训练数据 | Stage 1：每 task 使用 30 Clean + 30 Randomized/Aug |
+| 一次性数据划分 | 每 task 各取 50 Clean + 50 Aug；Stage 1 各30，Stage 2 各20 |
 | 下载范围 | 完整 `robotwin-clean-and-aug-lerobot`，Clean 和 Aug 都下载 |
-| 训练步数 | 20,000 optimizer steps |
-| 保存步数 | 5,000 / 10,000 / 15,000 / 20,000 |
+| 训练步数 | Stage 1：15,000 optimizer steps |
+| 保存步数 | 3,000 / 6,000 / 9,000 / 12,000 / 15,000 |
 | 单卡 batch | 1 |
 | 目标 global batch | 64 |
 | 学习率 | `1e-5` |
@@ -67,7 +69,13 @@ $$
 不要直接套用上游 README 中面向通用场景的旧命令。本次对齐实验使用：
 
 ```text
-训练：
+一次性两阶段数据准备：
+script/prepare_robotwin_two_stage_dataset.py
+
+Stage 1 正式训练：
+script/run_robotwin_stage1_sft_portable.sh
+
+底层 portable 训练入口：
 script/run_robotwin_clean_train_portable.sh
 
 任意兼容 GPU 数、global batch 64、20K ZIP 基线训练 + checkpoint 差分 watcher：
@@ -97,13 +105,15 @@ script/audit_robotwin_clean_eval.py
 
 ```text
 [ ] 完整 Clean+Aug 数据已下载
-[ ] Clean 数据审计为 DATASET_AUDIT_OK
+[ ] 原始 Clean 数据审计为 DATASET_AUDIT_OK
+[ ] 两阶段数据准备为 TWO_STAGE_DATASET_PREPARATION_OK
+[ ] 后续只使用 --verify-only，划分 manifest SHA256 保持不变
 [ ] RoboTwin Vulkan/RT 渲染检查通过
 [ ] 官方模型完成 50x10 且 SR >= 85%
-[ ] 训练日志到达 20000/20000
+[ ] Stage 1 训练日志到达 15000/15000
 [ ] exit_code 内容为 0
 [ ] 日志包含 TRAIN_DONE rc=0
-[ ] 恰好存在 4 个目标 checkpoint
+[ ] 恰好存在 5 个目标 checkpoint
 [ ] 每个 checkpoint 的模型权重和 config.json 非空
 [ ] 每个自有 checkpoint 都使用同一 50x10 协议评测
 [ ] 每个 summary.json 均通过 seed/timing/res 严格审计
@@ -114,6 +124,7 @@ script/audit_robotwin_clean_eval.py
 本文档包含完整可执行流程。遇到需要深入理解的部分，再阅读：
 
 - [`README.md`](README.md)：LingBot-VA 原始项目介绍、模型结构、通用训练和推理背景。
+- [`RoboTwin_Two_Stage_Training.md`](RoboTwin_Two_Stage_Training.md)：当前 Clean+Randomized 两阶段数据划分与 Stage 1 训练的权威执行文档。
 - [`RoboTwin_Evaluation_Usage.md`](RoboTwin_Evaluation_Usage.md)：正式评测协议、Easy/Hard 定义、断点恢复、GPU holder 和结果审计原则。
 - [`INSTALL.md`](INSTALL.md)：本代码快照的最小安装说明。
 - [`MIGRATION_MANIFEST.md`](MIGRATION_MANIFEST.md)：从原服务器整理到本仓库时保留和排除的内容。
@@ -601,7 +612,7 @@ python script/audit_robotwin_clean_dataset.py \
 
 ### 6.5 训练样本到底如何构造
 
-Clean 数据包含 50 个任务，每个任务 50 条 episode，共 2500 条轨迹。训练不是简单地“一条轨迹等于一个 optimizer step”：
+当前 Stage 1 包含 50 个任务，每个任务 30 条 Clean episode 和 30 条 Randomized episode，共 3000 条轨迹。训练不是简单地“一条轨迹等于一个 optimizer step”：
 
 1. 每个 episode 的 `action_config` 定义一个或多个训练 segment；
 2. 每个 segment 对应一个帧区间；
@@ -619,14 +630,14 @@ Clean 数据包含 50 个任务，每个任务 50 条 episode，共 2500 条轨�
 - [`wan_va/configs/va_robotwin_train_cfg.py`](wan_va/configs/va_robotwin_train_cfg.py)
 - [`README.md`](README.md) 的 Post-Training 章节。
 
-按约 2492 个有效 segment 和 global batch 64 估算：
+一次性数据准备的审计会直接输出 `stage1_valid_segments`。假设该值为 \(N\)，15,000 optimizer steps、global batch 64 对应：
 
 ```text
-20000 optimizer steps x 64 = 1280000 segment draws
-1280000 / 2492 ≈ 514 dataset-equivalent passes
+15000 optimizer steps x 64 = 960000 segment draws
+dataset-equivalent passes = 960000 / N
 ```
 
-这里的 pass 是按 segment 数量估算，不等价于完整视频轨迹被逐帧完整遍历 514 次。因此不能仅凭“epoch 数”判断最好 checkpoint，必须评测 5K/10K/15K/20K。
+这里的 pass 是按有效 segment 数量估算，不等价于完整视频轨迹被逐帧完整遍历。因此不能仅凭“epoch 数”判断最好 checkpoint，必须评测 3K/6K/9K/12K/15K。
 
 ---
 
@@ -832,7 +843,77 @@ rg -n "Traceback|CUDA out of memory|DeviceLost|AttributeError|timeout|no.progres
 
 ---
 
-## 9. 启动 Clean-only ZIP 基线训练
+## 9. 当前 Clean + Randomized Stage 1 基线训练
+
+当前实验不再直接用完整 Clean 目录启动。必须先按
+[`RoboTwin_Two_Stage_Training.md`](RoboTwin_Two_Stage_Training.md)
+完成一次性固定划分：
+
+```bash
+export SOURCE_DATA_ROOT="$LINGBOT_ROOT/datasets/robotwin-clean-and-aug-lerobot"
+export PREPARED_DATA_ROOT="$LINGBOT_ROOT/datasets/robotwin-clean-aug-two-stage-seed42"
+
+cd "$LINGBOT_ROOT/code"
+source .venv/bin/activate
+
+python script/prepare_robotwin_two_stage_dataset.py \
+  --source-root "$SOURCE_DATA_ROOT" \
+  --output-root "$PREPARED_DATA_ROOT" \
+  --seed 42 \
+  --expected-tasks 50 \
+  --per-domain-total 50 \
+  --stage1-per-domain 30 \
+  --link-mode hardlink \
+  --allow-missing-latent-segments 8
+```
+
+这一步每个 task 分别从 Clean 和 Randomized/Aug 选择 50 条，并固定切成：
+
+```text
+Stage 1: 30 Clean + 30 Randomized
+Stage 2: 20 Clean + 20 Randomized
+```
+
+数据准备只执行一次。之后只允许：
+
+```bash
+python script/prepare_robotwin_two_stage_dataset.py \
+  --output-root "$PREPARED_DATA_ROOT" \
+  --allow-missing-latent-segments 8 \
+  --verify-only
+```
+
+Stage 1 正式训练：
+
+```bash
+export CUDA_VISIBLE_DEVICES=0,1,2,3
+export NGPU=4
+export BATCH_SIZE=1
+export RUN_ID="robotwin_clean_aug_stage1_4xh100_global64_15000steps_$(date +%Y%m%d_%H%M%S)"
+export LINGBOT_SWANLAB_MODE=online
+
+tmux new -s lingbot-stage1
+bash script/run_robotwin_stage1_sft_portable.sh
+```
+
+固定协议：
+
+```text
+dataset: stage1/（50 tasks x 30 Clean + 50 tasks x 30 Randomized）
+global batch: 64
+optimizer steps: 15000
+save steps: 3000,6000,9000,12000,15000
+learning rate: 1e-5
+warmup: 10
+scheduler: constant
+```
+
+训练输出的 `run_manifest.txt` 必须包含 `train_stage=stage1` 和
+`split_manifest_sha256`。完整数据结构、审计、SwanLab 和正常结束检查见
+[`RoboTwin_Two_Stage_Training.md`](RoboTwin_Two_Stage_Training.md)。
+
+<details>
+<summary>历史 Clean-only 20K ZIP 基线流程（仅用于复现实验，不是当前 Stage 1 入口）</summary>
 
 ### 9.1 默认训练配置
 
@@ -1033,6 +1114,8 @@ done
 
 如果 checkpoint 正在写入，不要在模型大文件还增长时复制、评测或计算最终 hash。
 
+</details>
+
 ---
 
 ## 10. 训练 checkpoint 与基础模型的变化检查
@@ -1048,39 +1131,12 @@ done
 5. L2 范数、相对 L2、最大绝对差、参数余弦相似度；
 6. 配置文件是否仍可被评测加载。
 
-### 10.1 自动 watcher
+### 10.1 当前 Stage 1 的 watcher
 
-如果按第 9.3 节使用：
-
-```bash
-bash script/run_robotwin_clean_zipbaseline_global64_20k_with_delta_audit.sh
-```
-
-则无需再手动启动 watcher。检查：
-
-```bash
-cat "$RUN_ROOT/checkpoint_delta_vs_base/watch_status.json"
-tail -n 100 "$RUN_ROOT/checkpoint_delta_vs_base/watcher.log"
-```
-
-每个 checkpoint 会输出：
+Stage 1 包装器不会自动启动 watcher，避免未经确认的共享存储 I/O 干扰训练。需要差分记录时，按第 10.3 节另开一个 CPU watcher，并固定检查：
 
 ```text
-checkpoint_step_5000_vs_base.json
-checkpoint_step_5000_vs_base.txt
-...
-checkpoint_step_20000_vs_base.json
-checkpoint_step_20000_vs_base.txt
-```
-
-`watch_status.json` 最终应为：
-
-```json
-{
-  "completed_steps": [5000, 10000, 15000, 20000],
-  "pending_steps": [],
-  "failures": {}
-}
+3000,6000,9000,12000,15000
 ```
 
 ### 10.2 手动比较单个 checkpoint
@@ -1088,8 +1144,8 @@ checkpoint_step_20000_vs_base.txt
 ```bash
 python script/compare_checkpoint_to_base.py compare \
   --base "$LINGBOT_ROOT/models/lingbot-va-base" \
-  --checkpoint "$RUN_ROOT/checkpoints/checkpoint_step_5000" \
-  --output "$RUN_ROOT/checkpoint_delta_vs_base/checkpoint_step_5000_vs_base.json"
+  --checkpoint "$RUN_ROOT/checkpoints/checkpoint_step_3000" \
+  --output "$RUN_ROOT/checkpoint_delta_vs_base/checkpoint_step_3000_vs_base.json"
 ```
 
 程序同时生成同名 `.txt` 摘要。退出码为 0 且 `audit_ok=true` 才表示：
@@ -1110,7 +1166,7 @@ nohup "$LINGBOT_ROOT/code/.venv/bin/python" \
   script/compare_checkpoint_to_base.py watch \
   --base "$LINGBOT_ROOT/models/lingbot-va-base" \
   --checkpoint-root "$RUN_ROOT/checkpoints" \
-  --steps 5000,10000,15000,20000 \
+  --steps 3000,6000,9000,12000,15000 \
   --output "$RUN_ROOT/checkpoint_delta_vs_base" \
   --poll-seconds 60 \
   --stable-polls 2 \
@@ -1139,7 +1195,7 @@ JSON 的 `overall` 包含：
 ```bash
 BASE="$LINGBOT_ROOT/models/lingbot-va-base/transformer/diffusion_pytorch_model.safetensors"
 
-for step in 5000 10000 15000 20000; do
+for step in 3000 6000 9000 12000 15000; do
   CKPT="$RUN_ROOT/checkpoints/checkpoint_step_${step}/transformer/diffusion_pytorch_model.safetensors"
   test -s "$CKPT"
   sha256sum "$CKPT"
@@ -1158,7 +1214,7 @@ done
 
 ---
 
-## 11. 对齐评测 5K/10K/15K/20K
+## 11. 对齐评测 3K/6K/9K/12K/15K
 
 ### 11.1 前置条件
 
@@ -1187,7 +1243,7 @@ export LINGBOT_ROOT=/path/to/Lingbot-va
 export NGPU=4
 export CUDA_VISIBLE_DEVICES=0,1,2,3
 
-export CHECKPOINT_PATH="$RUN_ROOT/checkpoints/checkpoint_step_5000"
+export CHECKPOINT_PATH="$RUN_ROOT/checkpoints/checkpoint_step_3000"
 bash script/run_robotwin_clean_checkpoint_eval.sh
 ```
 
@@ -1204,7 +1260,7 @@ bash script/run_robotwin_clean_checkpoint_eval.sh
 
 ```bash
 export CALIBRATION_SUMMARY=/path/to/official-calibration/summary.json
-export CHECKPOINT_PATH="$RUN_ROOT/checkpoints/checkpoint_step_10000"
+export CHECKPOINT_PATH="$RUN_ROOT/checkpoints/checkpoint_step_6000"
 bash script/run_robotwin_clean_checkpoint_eval.sh
 ```
 
@@ -1213,7 +1269,7 @@ bash script/run_robotwin_clean_checkpoint_eval.sh
 不要并行评测多个 checkpoint。串行运行：
 
 ```bash
-for step in 5000 10000 15000 20000; do
+for step in 3000 6000 9000 12000 15000; do
   export CHECKPOINT_PATH="$RUN_ROOT/checkpoints/checkpoint_step_${step}"
   export RESULT_LABEL="checkpoint_step_${step}"
   NGPU=4 bash script/run_robotwin_clean_checkpoint_eval.sh
@@ -1229,7 +1285,7 @@ done
 - 每任务 success / total / SR；
 - 总 success、total 和 micro-average SR；
 - mean / median / P95 episode timing；
-- timing episode `1..20` 连续；
+- timing episode `1..10` 连续；
 - seed 无重复、顺序正确且来自固定 cache；
 - `res` total/success 与 timing 一致；
 - `AUDIT_OK`。
@@ -1254,7 +1310,7 @@ $$
 | 字段 | 内容 |
 |---|---|
 | Model | checkpoint step 和完整路径 |
-| Train data | Clean 50 tasks / 2500 trajectories |
+| Train data | Stage 1：50 tasks x (30 Clean + 30 Randomized)，共3000 trajectories |
 | Steps | optimizer steps |
 | Global batch | batch/GPU x GPU x GA |
 | Scheduler | constant |
@@ -1271,10 +1327,11 @@ $$
 
 ```text
 official model
-checkpoint_step_5000
-checkpoint_step_10000
+checkpoint_step_3000
+checkpoint_step_6000
+checkpoint_step_9000
+checkpoint_step_12000
 checkpoint_step_15000
-checkpoint_step_20000
 ```
 
 不要：
@@ -1423,12 +1480,14 @@ export LINGBOT_SWANLAB_MODE=offline
 7. 下载完整 robotwin-clean-and-aug-lerobot
 8. 审计 Clean 50 tasks / 2500 episodes / latent
 9. 安装 RoboTwin、cuRobo、PyTorch3D 和仿真资产
-10. 运行官方模型 50x10 校准，必须 SR >= 85%
-11. 运行 Clean-only ZIP baseline 20K 训练，global batch 固定 64
-12. 核验 5K/10K/15K/20K 四个 checkpoint
-13. 训练停止后串行评测四个 checkpoint
-14. 审计每轮 summary.json
-15. 汇总逐任务 SR、总 SR、墙钟、吞吐和 timing
+10. 一次性划分每 task 的 50 Clean + 50 Aug 为 Stage 1 的30+30和 Stage 2 的20+20
+11. 审计两阶段数据并固定 split_manifest.json SHA256
+12. 运行官方模型 50x10 校准，必须 SR >= 85%
+13. 运行 Stage 1 Clean+Randomized 15K SFT，global batch 固定 64
+14. 核验 3K/6K/9K/12K/15K 五个 checkpoint
+15. 训练停止后串行评测五个 checkpoint
+16. 审计每轮 summary.json
+17. 汇总逐任务 SR、总 SR、墙钟、吞吐和 timing
 ```
 
 最终需要保存：
@@ -1438,10 +1497,11 @@ export LINGBOT_SWANLAB_MODE=offline
 environment-freeze.txt
 nvidia-smi
 Clean dataset audit JSON
+两阶段 split_manifest.json 与 PREPARATION_COMPLETE.json
 官方模型 calibration summary.json
 训练 run_manifest.txt 和 train.log
-四个 checkpoint
-四轮 checkpoint evaluation summary.json
+五个 checkpoint
+五轮 checkpoint evaluation summary.json
 异常和恢复记录
 ```
 

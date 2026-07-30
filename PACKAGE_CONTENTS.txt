@@ -5,6 +5,7 @@ MIGRATION_MANIFEST.md
 Makefile
 README.md
 RoboTwin_Evaluation_Usage.md
+RoboTwin_Two_Stage_Training.md
 TARGET_SETUP.md
 assets/teaser_v3.png
 auto_pipline_readme.md
@@ -123,6 +124,7 @@ script/nvidia_icd.json
 script/precompute_robotwin_eval_seeds.py
 script/precompute_robotwin_prompt_embeddings.py
 script/prepare_lingbot_5090_runtime.sh
+script/prepare_robotwin_two_stage_dataset.py
 script/resume_robotwin_eval_setup.sh
 script/robotwin_critic_build_consistency_pairs.sh
 script/robotwin_critic_build_feature_cache.sh
@@ -173,6 +175,7 @@ script/run_robotwin_official_then_reverse_n5_4xh100.sh
 script/run_robotwin_posttrain_official_easy_n20_6gpu.sh
 script/run_robotwin_rt_cpg1_hard_official.sh
 script/run_robotwin_rt_cpg1_step600_n20.sh
+script/run_robotwin_stage1_sft_portable.sh
 script/run_robotwin_train.sh
 script/run_robotwin_train_4gpu.sh
 script/run_robotwin_train_4xh100_b1_ga32_swanlab.sh
@@ -185,6 +188,8 @@ script/setup_libero_eval.sh
 script/setup_libero_train_cn.sh
 script/setup_robotwin_eval.sh
 script/verify_modelscope_robotwin_model.py
+tests/__init__.py
+tests/test_prepare_robotwin_two_stage_dataset.py
 third_party/RoboTwin/.gitignore
 third_party/RoboTwin/LICENSE
 third_party/RoboTwin/README.md
