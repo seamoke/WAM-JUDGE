@@ -3,6 +3,7 @@ import unittest
 from .sft_compat import (
     compatible_caching_allocator_warmup,
     compatible_internvl_loss_context,
+    destroy_distributed_process_group,
 )
 
 
@@ -14,6 +15,22 @@ class DummyModel:
 class DummyDdp:
     def __init__(self, module):
         self.module = module
+
+
+class DummyDistributed:
+    def __init__(self, available=True, initialized=True):
+        self.available = available
+        self.initialized = initialized
+        self.destroy_calls = 0
+
+    def is_available(self):
+        return self.available
+
+    def is_initialized(self):
+        return self.initialized
+
+    def destroy_process_group(self):
+        self.destroy_calls += 1
 
 
 class SftCompatibilityTest(unittest.TestCase):
@@ -67,6 +84,16 @@ class SftCompatibilityTest(unittest.TestCase):
 
         wrapped = compatible_internvl_loss_context(original)
         self.assertIs(wrapped(object(), model, {}), model)
+
+    def test_destroy_initialized_process_group(self):
+        dist = DummyDistributed()
+        self.assertTrue(destroy_distributed_process_group(dist))
+        self.assertEqual(dist.destroy_calls, 1)
+
+    def test_skip_uninitialized_process_group(self):
+        dist = DummyDistributed(initialized=False)
+        self.assertFalse(destroy_distributed_process_group(dist))
+        self.assertEqual(dist.destroy_calls, 0)
 
 
 if __name__ == "__main__":

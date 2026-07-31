@@ -123,9 +123,29 @@ if [[ "$MODE" == "smoke" && "$RUN_EVAL" == "1" ]]; then
     echo "Smoke training finished but no full-model checkpoint was found under $OUTPUT_DIR" >&2
     exit 4
   fi
+  EVAL_MODEL="$SMOKE_MODEL"
+  if [[ -n "${LOCAL_EVAL_MODEL_ROOT:-}" ]]; then
+    EVAL_MODEL="$LOCAL_EVAL_MODEL_ROOT/$(basename "$OUTPUT_DIR")-$(basename "$SMOKE_MODEL")"
+    mkdir -p "$EVAL_MODEL"
+    rsync -a --delete --delete-excluded \
+      --exclude optimizer.pt \
+      --exclude 'rng_state_*.pth' \
+      --exclude scheduler.pt \
+      "$SMOKE_MODEL/" \
+      "$EVAL_MODEL/"
+    [[ -s "$EVAL_MODEL/config.json" ]] || {
+      echo "Local eval checkpoint is incomplete: $EVAL_MODEL" >&2
+      exit 5
+    }
+    [[ -s "$EVAL_MODEL/model.safetensors" ]] || {
+      echo "Local eval checkpoint weights are missing: $EVAL_MODEL" >&2
+      exit 5
+    }
+    echo "Staged eval-only checkpoint: $EVAL_MODEL"
+  fi
   EVAL_DIR="${EVAL_DIR:-$CRITIC_ROOT/vlac_finetune/vlac_2b_eval_full_smoke_4xh100}"
   "$VENV_DIR/bin/python" -m robotwin_critic.vlac_finetune.evaluate_vlac \
-    --model "$SMOKE_MODEL" \
+    --model "$EVAL_MODEL" \
     --data-dir "$DATA_DIR" \
     --output-dir "$EVAL_DIR" \
     --device cuda:0 \

@@ -130,6 +130,15 @@ export PYTORCH_ALLOC_CONF=expandable_segments:True
   printf 'lr_scheduler=%s\n' "${LINGBOT_LR_SCHEDULER}"
   printf 'max_episode_frames=%s\n' "${LINGBOT_MAX_EPISODE_FRAMES}"
   printf 'swanlab_mode=%s\n' "${LINGBOT_SWANLAB_MODE}"
+  if [[ -n "${ROBOTWIN_TRAIN_STAGE:-}" ]]; then
+    printf 'train_stage=%s\n' "${ROBOTWIN_TRAIN_STAGE}"
+  fi
+  if [[ -n "${ROBOTWIN_SPLIT_MANIFEST:-}" ]]; then
+    test -s "${ROBOTWIN_SPLIT_MANIFEST}"
+    printf 'split_manifest=%s\n' "${ROBOTWIN_SPLIT_MANIFEST}"
+    printf 'split_manifest_sha256=%s\n' \
+      "$(sha256sum "${ROBOTWIN_SPLIT_MANIFEST}" | awk '{print $1}')"
+  fi
 } > "${OUT}/run_manifest.txt"
 
 printf 'TRAIN_START %s\n' "$(date -Is)" | tee "${LOG}"
