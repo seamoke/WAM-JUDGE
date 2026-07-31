@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from robotwin_critic.two_stage_rft.protocol import (
+from robotwin_critic.vlac_finetune.two_stage_protocol import (
     DOMAINS,
     STAGES,
     audit_protocol,

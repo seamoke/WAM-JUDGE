@@ -68,7 +68,7 @@ if [[ ! -s "$MODEL_PATH/config.json" ]]; then
     --output-dir "$MODEL_PATH"
 fi
 
-"$VENV_DIR/bin/python" -m robotwin_critic.two_stage_rft.build_vlac_index \
+"$VENV_DIR/bin/python" -m robotwin_critic.vlac_finetune.build_two_stage_index \
   --prepared-root "$PREPARED_DATA_ROOT" \
   --output "$INDEX_PATH" \
   --max-tasks "$MAX_TASKS"
@@ -85,7 +85,7 @@ fi
   --data-dir "$PAIR_ROOT"
 
 if [[ "$MODE" == "full" && "${USE_ALL_PROTOCOL_PAIRS:-1}" == "1" ]]; then
-  "$VENV_DIR/bin/python" -m robotwin_critic.two_stage_rft.use_all_vlac_pairs \
+  "$VENV_DIR/bin/python" -m robotwin_critic.vlac_finetune.use_all_protocol_pairs \
     --data-dir "$PAIR_ROOT"
 fi
 
