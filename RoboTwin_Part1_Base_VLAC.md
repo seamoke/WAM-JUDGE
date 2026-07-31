@@ -23,13 +23,28 @@ export PROJECT_ROOT="$LINGBOT_ROOT/code"
 export SOURCE_DATA_ROOT="$LINGBOT_ROOT/datasets/robotwin-clean-and-aug-lerobot"
 export PREPARED_DATA_ROOT="$LINGBOT_ROOT/datasets/robotwin-clean-aug-two-stage-seed42"
 cd "$PROJECT_ROOT"
+
+export PART1_RUN_ID="robotwin_part1_$(date +%Y%m%d_%H%M%S)"
+export PART1_LOG="$LINGBOT_ROOT/train_out/logs/${PART1_RUN_ID}.log"
+mkdir -p "$(dirname "$PART1_LOG")"
+: > "$PART1_LOG"
+echo "Part 1 started: $(date -Is)" | tee -a "$PART1_LOG"
+```
+
+后续命令必须在同一个 Bash 终端执行。所有命令使用 `tee -a "$PART1_LOG"` 追加到同一个
+日志文件；`set -o pipefail` 保证训练失败不会被 `tee` 隐藏：
+
+```bash
+set -o pipefail
 ```
 
 每次训练前检查 GPU：
 
 ```bash
-nvidia-smi
-nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv
+{
+  nvidia-smi
+  nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv
+} 2>&1 | tee -a "$PART1_LOG"
 ```
 
 存在未知 GPU 进程时不要启动。
@@ -49,7 +64,8 @@ python script/prepare_robotwin_two_stage_dataset.py \
   --per-domain-total 50 \
   --stage1-per-domain 30 \
   --link-mode hardlink \
-  --allow-missing-latent-segments 8
+  --allow-missing-latent-segments 8 \
+  2>&1 | tee -a "$PART1_LOG"
 ```
 
 必须看到：
@@ -64,7 +80,8 @@ TWO_STAGE_DATASET_PREPARATION_OK
 python script/prepare_robotwin_two_stage_dataset.py \
   --output-root "$PREPARED_DATA_ROOT" \
   --allow-missing-latent-segments 8 \
-  --verify-only
+  --verify-only \
+  2>&1 | tee -a "$PART1_LOG"
 ```
 
 不要修改或删除：
@@ -78,7 +95,8 @@ $PREPARED_DATA_ROOT/PREPARATION_COMPLETE.json
 
 ```bash
 export RUN_ID="robotwin_stage1_4xh100_$(date +%Y%m%d_%H%M%S)"
-bash script/run_robotwin_stage1_sft_portable.sh
+bash script/run_robotwin_stage1_sft_portable.sh \
+  2>&1 | tee -a "$PART1_LOG"
 ```
 
 输出：
@@ -92,7 +110,7 @@ $LINGBOT_ROOT/train_out/robotwin/$RUN_ID/
 ```bash
 for step in 3000 6000 9000 12000 15000; do
   test -d "$LINGBOT_ROOT/train_out/robotwin/$RUN_ID/checkpoints/checkpoint_step_$step"
-done
+done 2>&1 | tee -a "$PART1_LOG"
 ```
 
 日志必须到达 `15000/15000`。
@@ -105,13 +123,15 @@ done
 先准备 2-task smoke：
 
 ```bash
-bash script/robotwin_two_stage_vlac_prepare.sh smoke
+bash script/robotwin_two_stage_vlac_prepare.sh smoke \
+  2>&1 | tee -a "$PART1_LOG"
 ```
 
 再准备全部 50 tasks：
 
 ```bash
-bash script/robotwin_two_stage_vlac_prepare.sh full
+bash script/robotwin_two_stage_vlac_prepare.sh full \
+  2>&1 | tee -a "$PART1_LOG"
 ```
 
 输出：
@@ -130,7 +150,8 @@ $LINGBOT_ROOT/train_out/critic/robotwin/vlac_finetune/two_stage_full
 先跑四卡 10-step smoke：
 
 ```bash
-bash script/robotwin_two_stage_vlac_train.sh smoke
+bash script/robotwin_two_stage_vlac_train.sh smoke \
+  2>&1 | tee -a "$PART1_LOG"
 ```
 
 必须满足：
@@ -147,7 +168,8 @@ smoke_passed: true
 smoke 通过后启动 full：
 
 ```bash
-bash script/robotwin_two_stage_vlac_train.sh full
+bash script/robotwin_two_stage_vlac_train.sh full \
+  2>&1 | tee -a "$PART1_LOG"
 ```
 
 10-step 只验证训练和评测链路，不能作为最终 critic 结果。正式结果报告独立测试集的
@@ -177,7 +199,8 @@ export MODELSCOPE_API_TOKEN
 export MODELSCOPE_REPO_ID="YOUR_NAMESPACE/lingbot-va-stage1-checkpoints"
 export STAGE1_RUN_DIR="$LINGBOT_ROOT/train_out/robotwin/$RUN_ID"
 
-bash script/upload_robotwin_stage1_checkpoints_modelscope.sh
+bash script/upload_robotwin_stage1_checkpoints_modelscope.sh \
+  2>&1 | tee -a "$PART1_LOG"
 
 unset MODELSCOPE_API_TOKEN
 ```
@@ -194,3 +217,20 @@ unset MODELSCOPE_API_TOKEN
 - VLAC full 完成；
 - 独立测试集指标已保存；
 - GPU 无残留进程。
+
+全部完成后执行：
+
+```bash
+{
+  echo "Part 1 completed: $(date -Is)"
+  echo "Base output: $LINGBOT_ROOT/train_out/robotwin/$RUN_ID"
+  echo "VLAC output: $LINGBOT_ROOT/train_out/critic/robotwin/vlac_finetune/two_stage_full_full_4xh100"
+  echo "Unified log: $PART1_LOG"
+} 2>&1 | tee -a "$PART1_LOG"
+
+test -s "$PART1_LOG"
+```
+
+最终只需把 `$PART1_LOG` 这个文件返回给需求方。日志中必须能看到 Base 到达
+`15000/15000`、VLAC smoke 通过、VLAC full 正常结束以及所有输出目录。ModelScope token
+不得写入或粘贴到日志。
