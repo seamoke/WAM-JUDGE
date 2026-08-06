@@ -42,6 +42,20 @@ displacement, gripper, rotation, and workspace thresholds in JSON. The current
 
 ## One-command run
 
+For a reusable no-argument command, copy
+`script/robotwin_stage2_online_rft.env.example` to
+`code/.local/robotwin_stage2_rft.env`, fill in the local paths, and run:
+
+```bash
+cd /inspire/hdd/project/sais-auto-scientist/public/Lingbot-va/code
+./script/run_robotwin_stage2_online_rft_pipeline.sh
+```
+
+The `.local` configuration is host-specific and should not be committed. CLI
+arguments remain available and take precedence over values in the local file.
+
+The equivalent explicit command is:
+
 ```bash
 cd /inspire/hdd/project/sais-auto-scientist/public/Lingbot-va/code
 
