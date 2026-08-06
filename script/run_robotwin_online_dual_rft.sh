@@ -29,6 +29,7 @@ PSEUDO_EPOCHS_PER_UPDATE="${PSEUDO_EPOCHS_PER_UPDATE:-3}"
 REAL_FRACTION="${REAL_FRACTION:-0.5}"
 UPDATE_STEPS="${UPDATE_STEPS:-}"
 MAX_UPDATES="${MAX_UPDATES:-1000}"
+MODEL_SAVE_EVERY_UPDATES="${MODEL_SAVE_EVERY_UPDATES:-50}"
 MIN_ACTION_SCORE="${MIN_ACTION_SCORE:-0.5}"
 ACTION_GATE_POLICY="${ACTION_GATE_POLICY:-score_with_safety_gates}"
 ACTION_WORKSPACE_SCOPE="${ACTION_WORKSPACE_SCOPE:-global}"
@@ -85,8 +86,8 @@ if [[ -z "$UPDATE_STEPS" ]]; then
     exit 2
   }
 fi
-if (( UPDATE_STEPS <= 0 || MAX_UPDATES <= 0 )); then
-  echo "UPDATE_STEPS and MAX_UPDATES must be positive" >&2
+if (( UPDATE_STEPS <= 0 || MAX_UPDATES <= 0 || MODEL_SAVE_EVERY_UPDATES <= 0 )); then
+  echo "UPDATE_STEPS, MAX_UPDATES, and MODEL_SAVE_EVERY_UPDATES must be positive" >&2
   exit 2
 fi
 
@@ -97,7 +98,7 @@ test -s "$INITIAL_MODEL/transformer/config.json"
 test -s "$CONTEXTS"
 test -s "$ACTION_PROFILE"
 test -s "$SPLIT_MANIFEST"
-mkdir -p "$ONLINE_ROOT" "$BUFFERS_DIR"
+mkdir -p "$ONLINE_ROOT" "$BUFFERS_DIR" "$ONLINE_ROOT/checkpoints"
 SWANLAB_RUN_ID_FILE="$ONLINE_ROOT/swanlab_run_id"
 if [[ "$SWANLAB_PARENT_DRIVER" == "1" ]]; then
   SWANLAB_RUN_ID="${SWANLAB_PARENT_RUN_ID:?Parent driver must set SWANLAB_PARENT_RUN_ID}"
@@ -125,7 +126,7 @@ export TOKENIZERS_PARALLELISM=false
 export PYTHONPATH="$PROJECT_ROOT:${PYTHONPATH:-}"
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 
-echo "ONLINE_DUAL_RFT_CONFIG infer_gpus=$INFER_GPU_IDS q_per_round=$Q_PER_ROUND q_per_gpu=$Q_PER_GPU inference_batch_per_gpu=$INFER_BATCH_SIZE_PER_GPU candidates_per_q=$CANDIDATES_PER_Q buffer_capacity=$BUFFER_CAPACITY pseudo_epochs_per_update=$PSEUDO_EPOCHS_PER_UPDATE real_fraction=$REAL_FRACTION train_batch_per_gpu=$TRAIN_BATCH_SIZE_PER_GPU train_global_batch=$TRAIN_GLOBAL_BATCH activation_checkpointing=$TRAIN_ACTIVATION_CHECKPOINTING update_steps=$UPDATE_STEPS max_updates=$MAX_UPDATES action_gate_policy=$ACTION_GATE_POLICY action_workspace_scope=$ACTION_WORKSPACE_SCOPE min_action_score=$MIN_ACTION_SCORE min_process_score=$MIN_PROCESS_SCORE max_pseudo_per_context=$MAX_PSEUDO_PER_CONTEXT swanlab_run_id=$SWANLAB_RUN_ID"
+echo "ONLINE_DUAL_RFT_CONFIG infer_gpus=$INFER_GPU_IDS q_per_round=$Q_PER_ROUND q_per_gpu=$Q_PER_GPU inference_batch_per_gpu=$INFER_BATCH_SIZE_PER_GPU candidates_per_q=$CANDIDATES_PER_Q buffer_capacity=$BUFFER_CAPACITY pseudo_epochs_per_update=$PSEUDO_EPOCHS_PER_UPDATE real_fraction=$REAL_FRACTION train_batch_per_gpu=$TRAIN_BATCH_SIZE_PER_GPU train_global_batch=$TRAIN_GLOBAL_BATCH activation_checkpointing=$TRAIN_ACTIVATION_CHECKPOINTING update_steps=$UPDATE_STEPS max_updates=$MAX_UPDATES model_save_every_updates=$MODEL_SAVE_EVERY_UPDATES action_gate_policy=$ACTION_GATE_POLICY action_workspace_scope=$ACTION_WORKSPACE_SCOPE min_action_score=$MIN_ACTION_SCORE min_process_score=$MIN_PROCESS_SCORE max_pseudo_per_context=$MAX_PSEUDO_PER_CONTEXT swanlab_run_id=$SWANLAB_RUN_ID"
 
 log_collection_swanlab() {
   local collect_index="${1:-}"
@@ -166,6 +167,7 @@ log_collection_swanlab
 
 run_ready_update() {
   local ready update_index current_model update_root train_root staged_model
+  local completed_update checkpoint_link previous_root previous_name previous_digits previous_update
   ready="$("$WAM_PYTHON" -m robotwin_critic.two_stage_rft.online_iteration field --state "$STATE" --name ready_buffer)"
   if [[ -z "$ready" ]]; then
     return 1
@@ -208,11 +210,40 @@ run_ready_update() {
   "$WAM_PYTHON" -m robotwin_critic.two_stage_rft.stage_updated_model \
     --base-model "$current_model" \
     --transformer "$train_root/checkpoints/checkpoint_step_${UPDATE_STEPS}/transformer" \
-    --output "$staged_model"
+    --output "$staged_model" \
+    --move-transformer
   "$WAM_PYTHON" -m robotwin_critic.two_stage_rft.online_iteration complete-update \
     --state "$STATE" \
     --model "$staged_model"
-  echo "ONLINE_UPDATE_OK index=$update_index model=$staged_model"
+
+  # The trainer checkpoint is only an intermediate used to assemble the next
+  # complete WAM. Keep logs, but do not retain this duplicate transformer copy.
+  rm -rf -- "$train_root/checkpoints"
+
+  completed_update=$((update_index + 1))
+  if (( completed_update % MODEL_SAVE_EVERY_UPDATES == 0 )); then
+    checkpoint_link="$ONLINE_ROOT/checkpoints/rft_update_$(printf '%06d' "$completed_update")"
+    ln -sfn "../updates/update_$(printf '%06d' "$update_index")/model" "$checkpoint_link"
+    printf '%s\n' "$completed_update" > "$staged_model/rft_checkpoint_update"
+    echo "ONLINE_MODEL_CHECKPOINT_SAVED update=$completed_update model=$staged_model link=$checkpoint_link"
+  fi
+
+  # Once the new model is active, discard the previous rolling model unless it
+  # is a retained 50-update milestone. Initial/external models are never touched.
+  previous_root="$(dirname "$current_model")"
+  previous_name="$(basename "$previous_root")"
+  if [[ "$previous_root" == "$ONLINE_ROOT"/updates/update_* && "$previous_name" == update_* ]]; then
+    previous_digits="${previous_name#update_}"
+    if [[ "$previous_digits" =~ ^[0-9]+$ ]]; then
+      previous_update=$((10#$previous_digits + 1))
+      if (( previous_update % MODEL_SAVE_EVERY_UPDATES != 0 )); then
+        rm -rf -- "$current_model"
+        echo "ONLINE_ROLLING_MODEL_REMOVED update=$previous_update model=$current_model"
+      fi
+    fi
+  fi
+
+  echo "ONLINE_UPDATE_OK index=$update_index completed_update=$completed_update model=$staged_model"
   return 0
 }
 

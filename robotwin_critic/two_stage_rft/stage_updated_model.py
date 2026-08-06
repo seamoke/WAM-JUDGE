@@ -5,10 +5,17 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 from pathlib import Path
 
 
-def stage_model(base_model: Path, transformer: Path, output: Path) -> dict:
+def stage_model(
+    base_model: Path,
+    transformer: Path,
+    output: Path,
+    *,
+    move_transformer: bool = False,
+) -> dict:
     base_model = base_model.expanduser().resolve()
     transformer = transformer.expanduser().resolve()
     output = output.expanduser().resolve()
@@ -25,11 +32,17 @@ def stage_model(base_model: Path, transformer: Path, output: Path) -> dict:
             if entry.name in {"transformer", "online_rft_model.json"}:
                 continue
             (temporary / entry.name).symlink_to(entry.resolve())
-        (temporary / "transformer").symlink_to(transformer)
+        if move_transformer:
+            transformer.rename(temporary / "transformer")
+        else:
+            (temporary / "transformer").symlink_to(transformer)
         manifest = {
             "base_model": str(base_model),
-            "updated_transformer": str(transformer),
+            "updated_transformer": str(output / "transformer")
+            if move_transformer
+            else str(transformer),
             "parameter_scope": "full_transformer",
+            "transformer_storage": "materialized" if move_transformer else "symlink",
         }
         (temporary / "online_rft_model.json").write_text(
             json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
@@ -37,9 +50,9 @@ def stage_model(base_model: Path, transformer: Path, output: Path) -> dict:
         os.replace(temporary, output)
     except BaseException:
         if temporary.exists():
-            for entry in temporary.iterdir():
-                entry.unlink()
-            temporary.rmdir()
+            if move_transformer and (temporary / "transformer").exists():
+                (temporary / "transformer").rename(transformer)
+            shutil.rmtree(temporary)
         raise
     return {**manifest, "output": str(output)}
 
@@ -49,10 +62,16 @@ def main() -> None:
     parser.add_argument("--base-model", type=Path, required=True)
     parser.add_argument("--transformer", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--move-transformer", action="store_true")
     args = parser.parse_args()
     print(
         json.dumps(
-            stage_model(args.base_model, args.transformer, args.output),
+            stage_model(
+                args.base_model,
+                args.transformer,
+                args.output,
+                move_transformer=args.move_transformer,
+            ),
             indent=2,
         )
     )

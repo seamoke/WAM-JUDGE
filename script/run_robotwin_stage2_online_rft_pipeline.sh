@@ -35,6 +35,7 @@ TRAIN_GLOBAL_BATCH="${TRAIN_GLOBAL_BATCH:-64}"
 PSEUDO_EPOCHS_PER_UPDATE="${PSEUDO_EPOCHS_PER_UPDATE:-3}"
 REAL_FRACTION="${REAL_FRACTION:-0.5}"
 MAX_UPDATES="${MAX_UPDATES:-1000}"
+MODEL_SAVE_EVERY_UPDATES="${MODEL_SAVE_EVERY_UPDATES:-50}"
 MIN_ACTION_SCORE="${MIN_ACTION_SCORE:-0.75}"
 MIN_PROCESS_SCORE="${MIN_PROCESS_SCORE:-5.0}"
 MAX_PSEUDO_PER_CONTEXT="${MAX_PSEUDO_PER_CONTEXT:-0}"
@@ -68,6 +69,7 @@ Common options:
   --prepare-only      Build Action Critic and Stage-2 contexts, then exit.
   --buffer-capacity N --q-per-round N --candidates-per-q N
   --train-global-batch N --real-fraction X --max-updates N
+  --model-save-every-updates N
   --swanlab-project NAME --swanlab-group NAME --swanlab-name NAME
   --swanlab-api-key-file PATH
 
@@ -102,6 +104,7 @@ while [[ $# -gt 0 ]]; do
     --pseudo-epochs-per-update) require_value "$@"; PSEUDO_EPOCHS_PER_UPDATE="$2"; shift 2 ;;
     --real-fraction) require_value "$@"; REAL_FRACTION="$2"; shift 2 ;;
     --max-updates) require_value "$@"; MAX_UPDATES="$2"; shift 2 ;;
+    --model-save-every-updates) require_value "$@"; MODEL_SAVE_EVERY_UPDATES="$2"; shift 2 ;;
     --min-action-score) require_value "$@"; MIN_ACTION_SCORE="$2"; shift 2 ;;
     --min-process-score) require_value "$@"; MIN_PROCESS_SCORE="$2"; shift 2 ;;
     --max-pseudo-per-context) require_value "$@"; MAX_PSEUDO_PER_CONTEXT="$2"; shift 2 ;;
@@ -253,7 +256,7 @@ export INFER_GPU_IDS="$GPU_IDS"
 export INFER_BATCH_SIZE_PER_GPU="$INFERENCE_BATCH_SIZE_PER_GPU"
 export Q_PER_ROUND INFER_BATCH_SIZE_PER_GPU CANDIDATES_PER_Q VLAC_BATCH_SIZE_PER_GPU
 export BUFFER_CAPACITY TRAIN_BATCH_SIZE_PER_GPU TRAIN_GLOBAL_BATCH
-export PSEUDO_EPOCHS_PER_UPDATE REAL_FRACTION MAX_UPDATES
+export PSEUDO_EPOCHS_PER_UPDATE REAL_FRACTION MAX_UPDATES MODEL_SAVE_EVERY_UPDATES
 export MIN_ACTION_SCORE MIN_PROCESS_SCORE MAX_PSEUDO_PER_CONTEXT
 export ACTION_GATE_POLICY=score_with_safety_gates
 export ACTION_WORKSPACE_SCOPE=global

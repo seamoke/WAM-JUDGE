@@ -113,6 +113,11 @@ The command performs these stages in order:
    and 50% pseudo chunks with global batch 64.
 10. Replace the WAM transformer with the updated checkpoint and repeat.
 
+The rolling model is refreshed after every RFT update so the next collection
+uses the latest parameters. Historical model checkpoints are retained only
+every 50 updates (`50, 100, 150, ...`). Non-milestone rolling models are
+removed after their successor is active.
+
 Only the WAM transformer is trainable, but it is fine-tuned in full rather than
 with LoRA. Both video latent flow-matching loss and action flow-matching loss
 are optimized.
@@ -131,6 +136,7 @@ are optimized.
 | Action Critic threshold | 0.75 |
 | VLAC process threshold | 5.0 |
 | maximum RFT updates | 1000 |
+| retained model interval | 50 RFT updates |
 
 Use `--help` to list the corresponding CLI overrides.
 
@@ -155,6 +161,7 @@ OUTPUT_ROOT/
     │   └── selection_summary.json
     ├── buffers/
     ├── updates/
+    ├── checkpoints/rft_update_000050 -> ../updates/update_000049/model
     ├── swanlab_url.txt
     └── swanlab/
 ```
