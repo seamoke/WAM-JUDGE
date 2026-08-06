@@ -21,6 +21,24 @@ PROPRIO_COLUMNS = (
     "observation.proprio",
     "state",
 )
+EEF_STATE_NAMES = (
+    "left_x",
+    "left_y",
+    "left_z",
+    "left_q1",
+    "left_q2",
+    "left_q3",
+    "left_q4",
+    "left_gripper",
+    "right_x",
+    "right_y",
+    "right_z",
+    "right_q1",
+    "right_q2",
+    "right_q3",
+    "right_q4",
+    "right_gripper",
+)
 
 
 def read_jsonl(path: Path) -> list[dict]:
@@ -76,6 +94,20 @@ def select_proprio_column(parquet: Path) -> str | None:
     return None
 
 
+def verified_eef_state_indices(repo: Path, column: str | None) -> tuple[int, ...]:
+    """Return the EEF mapping only when LeRobot metadata names it exactly."""
+    if column is None:
+        return ()
+    info = json.loads((repo / "meta" / "info.json").read_text(encoding="utf-8"))
+    feature = info.get("features", {}).get(column, {})
+    names = feature.get("names")
+    if len(names or []) == 1 and isinstance(names[0], list):
+        names = names[0]
+    if tuple(names or ()) == EEF_STATE_NAMES and list(feature.get("shape", [])) == [16]:
+        return tuple(range(16))
+    return ()
+
+
 def read_non_action_rows(
     parquet: Path,
     frame_indices: Iterable[int],
@@ -118,3 +150,28 @@ def latent_segment_exists(
         any((repo / "latents").glob(f"chunk-*/{camera}/{pattern}"))
         for camera in CAMERAS
     )
+
+
+def latent_segment_num_frames(
+    repo: Path, episode_index: int, start: int, end: int
+) -> int:
+    """Read one camera's latent metadata without touching the hidden action column."""
+    pattern = f"episode_{episode_index:06d}_{start}_{end}.pth"
+    matches = list((repo / "latents").glob(f"chunk-*/{CAMERAS[0]}/{pattern}"))
+    if len(matches) != 1:
+        raise FileNotFoundError(
+            f"Expected one latent segment for {repo} episode={episode_index} "
+            f"range=[{start},{end}), got {matches}"
+        )
+    import torch
+
+    try:
+        payload = torch.load(
+            matches[0], map_location="cpu", weights_only=False, mmap=True
+        )
+    except TypeError:
+        payload = torch.load(matches[0], map_location="cpu", weights_only=False)
+    frames = int(payload["latent_num_frames"])
+    if frames <= 0:
+        raise ValueError(f"Invalid latent_num_frames={frames} in {matches[0]}")
+    return frames

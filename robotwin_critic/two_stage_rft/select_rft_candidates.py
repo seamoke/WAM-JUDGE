@@ -28,9 +28,17 @@ def select_candidates(
     mode: str = "dual",
     min_action_score: float,
     require_exact_budget: bool = True,
+    expected_split_sha256: str | None = None,
 ) -> tuple[list[dict], dict]:
     if mode not in {"naive", "process", "action", "dual"}:
         raise ValueError(f"Unsupported selection mode: {mode}")
+    if expected_split_sha256 is not None:
+        observed = {str(row.get("split_manifest_sha256", "")) for row in rows}
+        if observed != {expected_split_sha256}:
+            raise ValueError(
+                f"Candidate split hashes {observed} do not match budget split "
+                f"{expected_split_sha256}"
+            )
     grouped: dict[str, list[dict]] = defaultdict(list)
     rejected_action = rejected_parse = 0
     for row in rows:
@@ -42,7 +50,7 @@ def select_candidates(
             continue
         if mode in {"action", "dual"} and (
             not bool(action.get("accepted", False))
-            or float(action.get("action_score", float("-inf"))) <= min_action_score
+            or float(action.get("action_score", float("-inf"))) < min_action_score
         ):
             rejected_action += 1
             continue
@@ -87,25 +95,44 @@ def select_candidates(
             + json.dumps(shortfalls, sort_keys=True)
         )
     selected.sort(key=lambda row: (group_key(row), context_key(row)))
+    selected = [
+        {
+            **row,
+            "rft_selection": {
+                "mode": mode,
+                "min_action_score": float(min_action_score),
+                "budget_group": group_key(row),
+                "group_budget": int(budgets[group_key(row)]),
+                "split_manifest_sha256": expected_split_sha256,
+            },
+        }
+        for row in selected
+    ]
     selected_counts = Counter(group_key(row) for row in selected)
     summary = {
         "input_candidates": len(rows),
         "action_rejected": rejected_action,
         "numeric_parse_rejected": rejected_parse,
-        "contexts_with_action_valid_candidate": len(grouped),
+        "contexts_with_mode_valid_candidate": len(grouped),
         "context_winners": len(winners),
         "selected": len(selected),
         "budget_total": sum(budgets.values()),
         "mode": mode,
+        "require_exact_budget": require_exact_budget,
+        "split_manifest_sha256": expected_split_sha256,
         "selected_by_group": dict(sorted(selected_counts.items())),
         "shortfalls": shortfalls,
-        "selection_rule": {
+        "selection_rule": ({
             "naive": "deterministic candidate without critic filtering",
             "process": "maximum VLAC process score per context",
             "action": "action threshold then maximum kinematic score per context",
             "dual": "action threshold then maximum VLAC process score per context",
         }[mode]
-        + "; globally retain exact task/domain Stage-2 loader budget",
+        + (
+            "; require exact task/domain Stage-2 loader budget"
+            if require_exact_budget
+            else "; retain up to task/domain budget and report every shortfall"
+        )),
     }
     return selected, summary
 
@@ -131,6 +158,7 @@ def main() -> None:
         mode=args.mode,
         min_action_score=args.min_action_score,
         require_exact_budget=not args.allow_shortfall,
+        expected_split_sha256=str(budget_document["split_manifest_sha256"]),
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w", encoding="utf-8") as handle:
@@ -142,7 +170,7 @@ def main() -> None:
         encoding="utf-8",
     )
     print(json.dumps(summary, indent=2, ensure_ascii=False))
-    print("ROBOTWIN_DUAL_RFT_SELECTION_OK")
+    print("ROBOTWIN_RFT_SELECTION_OK")
 
 
 if __name__ == "__main__":

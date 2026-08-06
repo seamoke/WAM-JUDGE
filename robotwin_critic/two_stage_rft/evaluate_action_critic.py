@@ -16,8 +16,8 @@ from robotwin_critic.two_stage_rft.kinematic_action_critic import (
 )
 from robotwin_critic.two_stage_rft.calibrate_action_critic import (
     find_parquet,
-    load_actions,
 )
+from robotwin_critic.two_stage_rft.data_access import verified_eef_state_indices
 from robotwin_critic.two_stage_rft.protocol import iter_episode_refs
 
 
@@ -51,14 +51,39 @@ def binary_auc(positive: list[float], negative: list[float]) -> float:
     return float(np.mean(comparisons))
 
 
+def load_actions_and_states(path: Path) -> tuple[np.ndarray, np.ndarray]:
+    import pyarrow.parquet as pq
+
+    table = pq.read_table(path, columns=["action", "observation.state"])
+    actions = np.asarray(table["action"].to_pylist(), dtype=np.float32)
+    states = np.asarray(table["observation.state"].to_pylist(), dtype=np.float32)
+    if actions.ndim != 2 or actions.shape[1] != 16:
+        raise ValueError(f"Expected [T,16] actions in {path}, got {actions.shape}")
+    if states.shape != actions.shape:
+        raise ValueError(
+            f"Expected observation.state to align with actions in {path}, "
+            f"got {states.shape} vs {actions.shape}"
+        )
+    return actions, states
+
+
 def evaluate(
     prepared_root: Path,
     profile_path: Path,
     *,
     max_segments: int,
+    expected_per_domain_total: int = 50,
+    expected_stage1_per_domain: int = 30,
 ) -> dict:
     profile = KinematicProfile.from_json(profile_path)
-    refs = list(iter_episode_refs(prepared_root, stages=("stage1",)))
+    refs = list(
+        iter_episode_refs(
+            prepared_root,
+            stages=("stage1",),
+            expected_per_domain_total=expected_per_domain_total,
+            expected_stage1_per_domain=expected_stage1_per_domain,
+        )
+    )
     real_scores = []
     real_accepts = []
     corrupt_scores: dict[str, list[float]] = defaultdict(list)
@@ -69,19 +94,40 @@ def evaluate(
         "orientation_spike",
         "excess_speed",
     )
+    stop = False
     for ref in refs:
-        actions = load_actions(find_parquet(ref.repo, ref.output_episode_index))
-        if len(actions) < 8:
-            continue
-        segment = to_relative_actions(actions)
-        result = score_relative_actions(segment, profile)
-        real_scores.append(result["action_score"])
-        real_accepts.append(result["accepted"])
-        for kind in kinds:
-            corrupted = score_relative_actions(corrupt(segment, kind), profile)
-            corrupt_scores[kind].append(corrupted["action_score"])
-            corrupt_accepts[kind].append(corrupted["accepted"])
-        if max_segments and len(real_scores) >= max_segments:
+        if verified_eef_state_indices(ref.repo, "observation.state") != tuple(range(16)):
+            raise ValueError(
+                f"{ref.repo}: observation.state is not the verified 16-D EEF state"
+            )
+        actions, states = load_actions_and_states(
+            find_parquet(ref.repo, ref.output_episode_index)
+        )
+        steps = profile.action_chunk_steps
+        for start in range(0, len(actions) - steps + 1, steps):
+            segment = to_relative_actions(actions[start : start + steps])
+            start_state = states[start]
+            result = score_relative_actions(
+                segment,
+                profile,
+                task=ref.task,
+                start_state=start_state,
+            )
+            real_scores.append(result["action_score"])
+            real_accepts.append(result["accepted"])
+            for kind in kinds:
+                corrupted = score_relative_actions(
+                    corrupt(segment, kind),
+                    profile,
+                    task=ref.task,
+                    start_state=start_state,
+                )
+                corrupt_scores[kind].append(corrupted["action_score"])
+                corrupt_accepts[kind].append(corrupted["accepted"])
+            if max_segments and len(real_scores) >= max_segments:
+                stop = True
+                break
+        if stop:
             break
     all_corrupt_scores = [
         score for kind in kinds for score in corrupt_scores[kind]
@@ -90,10 +136,13 @@ def evaluate(
         accepted for kind in kinds for accepted in corrupt_accepts[kind]
     ]
     return {
-        "evaluation_scope": "stage1_visible_actions_with_synthetic_corruption",
+        "evaluation_scope": (
+            "stage1_visible_actions_and_verified_eef_state_with_synthetic_corruption"
+        ),
         "reads_stage2_action": False,
-        "real_segments": len(real_scores),
-        "corrupted_segments": len(all_corrupt_scores),
+        "action_chunk_steps": profile.action_chunk_steps,
+        "real_chunks": len(real_scores),
+        "corrupted_chunks": len(all_corrupt_scores),
         "roc_auc": binary_auc(real_scores, all_corrupt_scores),
         "false_reject_rate": float(1.0 - np.mean(real_accepts)),
         "false_accept_rate": float(np.mean(all_corrupt_accepts)),
@@ -116,11 +165,15 @@ def main() -> None:
     parser.add_argument("--profile", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--max-segments", type=int, default=1000)
+    parser.add_argument("--expected-per-domain-total", type=int, default=50)
+    parser.add_argument("--expected-stage1-per-domain", type=int, default=30)
     args = parser.parse_args()
     result = evaluate(
         args.prepared_root,
         args.profile,
         max_segments=args.max_segments,
+        expected_per_domain_total=args.expected_per_domain_total,
+        expected_stage1_per_domain=args.expected_stage1_per_domain,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w", encoding="utf-8") as handle:

@@ -31,20 +31,46 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def read_manifest(prepared_root: Path, require_complete: bool = True) -> dict:
+def read_manifest(
+    prepared_root: Path,
+    require_complete: bool = True,
+    *,
+    expected_per_domain_total: int = 50,
+    expected_stage1_per_domain: int = 30,
+) -> dict:
     prepared_root = prepared_root.expanduser().resolve()
     manifest_path = prepared_root / "split_manifest.json"
     with manifest_path.open(encoding="utf-8") as handle:
         manifest = json.load(handle)
-    if int(manifest.get("schema_version", -1)) != 1:
-        raise ValueError("Expected split_manifest schema_version=1")
+    if int(manifest.get("schema_version", -1)) != 2:
+        raise ValueError(
+            "Expected redacted split_manifest schema_version=2; rebuild old prepared "
+            "data so Stage-2 parquet files do not physically expose action"
+        )
+    if manifest.get("stage1_action_visible") is not True:
+        raise ValueError("Stage-1 action visibility contract is missing")
+    if manifest.get("stage2_action_redacted") is not True:
+        raise ValueError("Stage-2 action redaction contract is missing")
+    if manifest.get("stage2_action_statistics_redacted") is not True:
+        raise ValueError("Stage-2 action-stat redaction contract is missing")
     split = manifest["split"]
-    if int(split["per_domain_total"]) != 50:
-        raise ValueError("Protocol requires exactly 50 selected episodes per domain/task")
-    if int(split["stage1_per_domain"]) != 30:
-        raise ValueError("Protocol requires 30 Stage-1 episodes per domain/task")
-    if int(split["stage2_per_domain"]) != 20:
-        raise ValueError("Protocol requires 20 Stage-2 episodes per domain/task")
+    expected_stage2_per_domain = (
+        expected_per_domain_total - expected_stage1_per_domain
+    )
+    observed = (
+        int(split["per_domain_total"]),
+        int(split["stage1_per_domain"]),
+        int(split["stage2_per_domain"]),
+    )
+    expected = (
+        expected_per_domain_total,
+        expected_stage1_per_domain,
+        expected_stage2_per_domain,
+    )
+    if observed != expected:
+        raise ValueError(
+            f"Protocol split must be total/stage1/stage2={expected}, got {observed}"
+        )
     if require_complete:
         with (prepared_root / "PREPARATION_COMPLETE.json").open(
             encoding="utf-8"
@@ -61,8 +87,14 @@ def iter_episode_refs(
     *,
     stages: tuple[str, ...] = STAGES,
     domains: tuple[str, ...] = DOMAINS,
+    expected_per_domain_total: int = 50,
+    expected_stage1_per_domain: int = 30,
 ) -> Iterator[EpisodeRef]:
-    manifest = read_manifest(prepared_root)
+    manifest = read_manifest(
+        prepared_root,
+        expected_per_domain_total=expected_per_domain_total,
+        expected_stage1_per_domain=expected_stage1_per_domain,
+    )
     for task_row in manifest["tasks"]:
         task = task_row["task"]
         for domain in domains:

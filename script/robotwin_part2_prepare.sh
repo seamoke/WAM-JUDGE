@@ -29,6 +29,8 @@ mkdir -p "$PART2_ROOT"
   --prepared-root "$PREPARED_DATA_ROOT" \
   --output "$PART2_ROOT/stage2_video_contexts.jsonl" \
   --history-frames "${HISTORY_FRAMES:-4}" \
+  --max-episode-frames "${MAX_EPISODE_FRAMES:-500}" \
+  --context-pool-multiplier "${CONTEXT_POOL_MULTIPLIER:-2.0}" \
   ${CONTEXT_LIMIT_ARGS:-}
 
 "$PYTHON" -m robotwin_critic.two_stage_rft.count_pseudo_budget \

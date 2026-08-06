@@ -16,7 +16,7 @@ set -o pipefail
   nvidia-smi
   bash "$PROJECT_ROOT/script/robotwin_part2_prepare.sh"
   bash "$PROJECT_ROOT/script/robotwin_part2_generate_and_select.sh"
-  bash "$PROJECT_ROOT/script/run_robotwin_action_only_rft.sh"
+  bash "$PROJECT_ROOT/script/run_robotwin_joint_rft.sh"
   nvidia-smi
   echo "PART2_DONE $(date -Is)"
 } 2>&1 | tee -a "$PART2_LOG"

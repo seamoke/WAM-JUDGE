@@ -30,6 +30,9 @@ class CandidateSelectionTest(unittest.TestCase):
         )
         self.assertEqual([row["process_score"] for row in selected], [20.0, 50.0])
         self.assertEqual(summary["action_rejected"], 1)
+        self.assertEqual(
+            {row["rft_selection"]["mode"] for row in selected}, {"dual"}
+        )
 
     def test_exact_budget_shortfall_fails_closed(self) -> None:
         with self.assertRaises(RuntimeError):

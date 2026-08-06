@@ -1,98 +1,178 @@
-# Part 2: Chunk-Level Dual-RFT
+# RoboTwin Stage-2 Dual-RFT
 
-Part 2 从 Part 1 的 M30 checkpoint 出发。原 WAM train/eval/server/client 文件不修改，
-全部新增代码位于 `robotwin_critic/two_stage_rft/`。
+This pipeline calibrates a kinematic Action Critic, builds action-free Stage-2
+contexts, generates WAM chunk candidates, filters them with Action Critic and
+VLAC, and repeatedly fine-tunes the full WAM transformer.
 
-## 方法
-
-每个 task 固定使用 50 Clean + 50 Randomized：
-
-| 数据 | Clean | Randomized | action 可见性 |
-|---|---:|---:|---|
-| Stage 1 / D30 | 30 | 30 | 可见 |
-| Stage 2 / D20 | 20 | 20 | 隐藏 |
-
-1. Kinematic Action Critic 只读取 D30 action，校准双臂 EEF velocity、
-   acceleration、jerk、rotation、gripper 和可选 workspace 阈值。profile 保存 split
-   哈希和全部校准 episode ID。
-2. D20 每条视频在 10%、30%、50%、70%、90% 进度构造 context。代码只读取三路
-   RGB、proprio 和 language，不读取 action。
-3. M30 对每个 context 生成 8 个 `(video, action)` chunk。
-4. Dual-RFT 先执行 `action_score > threshold`，再用 VLAC process score 选每个
-   context 的最佳候选；没有 action 合格候选就丢弃该 context。
-5. pseudo budget 等于 D20 在原 WAM loader 中的有效 chunk 数，并按 task/domain
-   分组严格匹配。数量不足时直接失败，不降低阈值。
-6. RFT batch 为 70% D30 real + 30% pseudo。只优化
-   `action_embedder`、`condition_embedder_action`、`action_proj_out`，video/shared
-   backbone 冻结，loss 只有 action flow matching。
-
-当前官方 WAM 首 chunk 接口只接收当前 RGB 和 language。context 仍保存 2–4 帧
-history 与 proprio，但生成时不会假称模型使用了不存在的 proprio/history token。
-若要注入它们，应作为后续架构实验。
-
-## 执行
-
-```bash
-export LINGBOT_ROOT=/inspire/hdd/project/sais-auto-scientist/public/Lingbot-va
-export PROJECT_ROOT="$LINGBOT_ROOT/code"
-export PREPARED_DATA_ROOT="$LINGBOT_ROOT/datasets/robotwin-clean-aug-two-stage-seed42"
-export STAGE1_CHECKPOINT="$LINGBOT_ROOT/train_out/robotwin/BASE_RUN/checkpoints/checkpoint_step_15000"
-export VLAC_MODEL="$LINGBOT_ROOT/train_out/critic/robotwin/VLAC_CHECKPOINT"
-export PART2_RUN_ID="robotwin_part2_$(date +%Y%m%d_%H%M%S)"
-export PART2_LOG="$LINGBOT_ROOT/train_out/logs/${PART2_RUN_ID}.log"
-
-bash script/robotwin_part2_all.sh
-```
-
-最终只需返回 `$PART2_LOG`。中间输出统一位于：
+The canonical entry point is:
 
 ```text
-$LINGBOT_ROOT/train_out/critic/robotwin/part2_rft/
+script/run_robotwin_stage2_online_rft_pipeline.sh
 ```
 
-可拆开执行：
+## Inputs
 
-```bash
-bash script/robotwin_part2_prepare.sh
-bash script/robotwin_part2_generate_and_select.sh
-bash script/run_robotwin_action_only_rft.sh
-```
+The command requires three paths:
 
-选择器同时生成四个严格同预算数据集：
+1. `--stage2-data-root`: either the prepared split root or its `stage2/`
+   directory.
+2. `--wam-model`: a complete WAM root or a transformer-only checkpoint such as
+   `checkpoint_step_15000`.
+3. `--vlac-model`: the trained VLAC checkpoint used as Process Critic.
+
+The prepared data must have this layout:
 
 ```text
-naive_rft_selected.jsonl
-process_rft_selected.jsonl
-action_rft_selected.jsonl
-dual_rft_selected.jsonl
+prepared_dataset/
+├── split_manifest.json
+├── PREPARATION_COMPLETE.json
+├── stage1/                  # action-labeled trajectories
+└── stage2/                  # action-free trajectories
 ```
 
-训练 ablation 时只替换 `PSEUDO_JSONL`，其余 checkpoint、steps、global batch 和
-seed 必须相同：
+Although the CLI accepts the `stage2/` path, `stage1/` must be its sibling.
+The Action Critic is calibrated only from Stage-1 actions. Stage-2 actions are
+not read.
+
+The Kinematic Action Critic is a calibrated profile rather than a neural
+network checkpoint. It stores task-aware velocity, acceleration, jerk,
+displacement, gripper, rotation, and workspace thresholds in JSON. The current
+50-task profile is 353KB: it was calibrated from 3,000 Stage-1 trajectories and
+40,094 action chunks, and requires no GPU memory at inference time.
+
+## One-command run
 
 ```bash
-PSEUDO_JSONL="$PART2_ROOT/process_rft_selected.jsonl" \
-RUN_ID=process_only_rft \
-bash script/run_robotwin_action_only_rft.sh
+cd /inspire/hdd/project/sais-auto-scientist/public/Lingbot-va/code
+
+bash script/run_robotwin_stage2_online_rft_pipeline.sh \
+  --stage2-data-root \
+    /inspire/hdd/project/sais-auto-scientist/public/Lingbot-va/datasets/robotwin-clean-aug-two-stage-redacted-seed42/stage2 \
+  --wam-model \
+    /inspire/hdd/project/sais-auto-scientist/public/Lingbot-va/models/lingbot-va-stage1-checkpoints/checkpoint_step_15000 \
+  --vlac-model \
+    /inspire/hdd/project/sais-auto-scientist/public/Lingbot-va/train_out/critic/robotwin/vlac_finetune/vlac_2b_full_4xh100/v0-20260724-175122/checkpoint-43852 \
+  --output-root \
+    /inspire/hdd/project/sais-auto-scientist/public/Lingbot-va/train_out/critic/robotwin/my_stage2_rft
 ```
 
-## 验证标准
+For a transformer-only WAM checkpoint, the script takes VAE, tokenizer, and
+text encoder from:
 
-- `stage1_kinematic_profile.json` 的 `calibration_scope` 必须为
-  `stage1_action_only`。
-- `stage2_video_contexts.summary.json` 的 `reads_action_column` 必须为 `false`。
-- selected 数量必须等于 `stage2_chunk_budget.json`，且每个 task/domain 都相等。
-- RFT manifest 中 video/shared 参数为 frozen，只有三个 action-specific module
-  可训练。
-- 每个方法使用同一 M30 checkpoint、同一 pseudo budget、同一 optimizer steps。
-- 最终在未参与训练的 RoboTwin seeds 上评测，每个 task/domain 100 episodes，
-  至少 3 个不同 30/20 split，报告 success rate 的均值、标准差和 per-task 结果。
+```text
+/inspire/hdd/project/sais-auto-scientist/public/Lingbot-va/models/lingbot-va-base
+```
 
-目标是 `Dual-RFT > Base-30`，并尽量接近使用全部真实 action 的 `Base-50`。
+Override it with `--base-model PATH` when necessary.
 
-## 当前测试状态
+To run in the background:
 
-本地 CPU 单元测试已覆盖 Kinematic 异常检测、四元数符号不变性、Stage1
-provenance、四种选择规则、exact-budget fail-closed 和 70/30 index 逻辑。
-真实 Torch/FSDP、官方 checkpoint、VLAC 端到端 smoke 尚需在 H100 服务器执行；
-当前本地 SSH 隧道 `127.0.0.1:2222` 在 banner 阶段超时。
+```bash
+nohup bash script/run_robotwin_stage2_online_rft_pipeline.sh \
+  --stage2-data-root /path/to/prepared_dataset/stage2 \
+  --wam-model /path/to/checkpoint_step_15000 \
+  --vlac-model /path/to/vlac_checkpoint \
+  --output-root /path/to/output \
+  > /path/to/launcher.log 2>&1 &
+```
+
+The SwanLab API key is read from `SWANLAB_API_KEY` or
+`code/.secrets/swanlab_api_key`.
+
+## Execution order
+
+The command performs these stages in order:
+
+1. Calibrate the Action Critic from Stage-1 action-labeled trajectories.
+2. Build Stage-2 video contexts without reading Stage-2 action labels.
+3. Build the Stage-2 pseudo-chunk budget.
+4. Compose a complete WAM root when the input checkpoint contains only a
+   transformer.
+5. For each collection round, sample 16 contexts and generate 8 one-chunk
+   candidates per context.
+6. Reject candidates below the Action Critic threshold.
+7. Score the remaining candidate futures with VLAC and reject low process
+   scores.
+8. Append every accepted candidate from the same context to a 512-chunk replay
+   buffer.
+9. When the buffer is full, train for 3 epochs using 50% Stage-1 real chunks
+   and 50% pseudo chunks with global batch 64.
+10. Replace the WAM transformer with the updated checkpoint and repeat.
+
+Only the WAM transformer is trainable, but it is fine-tuned in full rather than
+with LoRA. Both video latent flow-matching loss and action flow-matching loss
+are optimized.
+
+## Default hyperparameters
+
+| Setting | Default |
+|---|---:|
+| GPUs | `0,1,2,3` |
+| contexts per collection | 16 |
+| candidates per context | 8 |
+| pseudo-buffer capacity | 512 |
+| real/pseudo sampling | 50% / 50% |
+| pseudo epochs per update | 3 |
+| global training batch | 64 |
+| Action Critic threshold | 0.75 |
+| VLAC process threshold | 5.0 |
+| maximum RFT updates | 1000 |
+
+Use `--help` to list the corresponding CLI overrides.
+
+## Outputs
+
+```text
+OUTPUT_ROOT/
+├── stage2_online_rft.log
+├── part2/
+│   ├── stage1_kinematic_profile.json
+│   ├── stage2_video_contexts.jsonl
+│   └── stage2_chunk_budget.json
+└── online/
+    ├── initial_model/
+    ├── state.json
+    ├── pending_buffer.jsonl
+    ├── collect/collect_XXXXXX/
+    │   ├── candidates.jsonl
+    │   ├── action_scored.jsonl
+    │   ├── dual_scored.jsonl
+    │   ├── selected_winners.jsonl
+    │   └── selection_summary.json
+    ├── buffers/
+    ├── updates/
+    ├── swanlab_url.txt
+    └── swanlab/
+```
+
+`selected_winners.jsonl` contains every candidate that passes both critics;
+the name is retained for compatibility and does not imply one winner per
+context.
+
+## Prepare, resume, and restart
+
+Build only the Action Critic and Stage-2 contexts:
+
+```bash
+bash script/run_robotwin_stage2_online_rft_pipeline.sh \
+  --stage2-data-root /path/to/prepared_dataset/stage2 \
+  --wam-model /path/to/wam \
+  --vlac-model /path/to/vlac \
+  --output-root /path/to/output \
+  --prepare-only
+```
+
+To resume, rerun the same command with the same `--output-root`. The pipeline
+reuses its profile, contexts, buffer, current model, and SwanLab run ID.
+
+To discard the run and restart from the supplied WAM checkpoint, add
+`--fresh`. This permanently deletes only `OUTPUT_ROOT`; it never deletes the
+input dataset or model checkpoints.
+
+## Monitoring
+
+The long-lived Python RFT process owns one SwanLab session for the complete
+run. Collection retention, Action/VLAC score distributions, task coverage,
+buffer fill, training losses, gradient norm, learning rate, GPU memory, and
+real/pseudo sampling ratios are written to the same run. SwanLab is finished
+only when the RFT process exits.

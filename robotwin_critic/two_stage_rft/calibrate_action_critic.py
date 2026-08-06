@@ -49,24 +49,36 @@ def main() -> None:
     parser.add_argument("--hard-quantile", type=float, default=0.999)
     parser.add_argument("--minimum-score", type=float, default=0.5)
     parser.add_argument("--workspace-quantile", type=float, default=0.001)
+    parser.add_argument("--action-chunk-steps", type=int, default=16)
+    parser.add_argument("--expected-per-domain-total", type=int, default=50)
+    parser.add_argument("--expected-stage1-per-domain", type=int, default=30)
     args = parser.parse_args()
 
-    refs = list(iter_episode_refs(args.prepared_root, stages=("stage1",)))
+    refs = list(
+        iter_episode_refs(
+            args.prepared_root,
+            stages=("stage1",),
+            expected_per_domain_total=args.expected_per_domain_total,
+            expected_stage1_per_domain=args.expected_stage1_per_domain,
+        )
+    )
     if args.max_trajectories:
         refs = refs[: args.max_trajectories]
     fps_values = set()
     trajectories = []
     episode_ids = []
+    task_keys = []
     for ref in refs:
         with (ref.repo / "meta" / "info.json").open(encoding="utf-8") as handle:
             fps_values.add(float(json.load(handle)["fps"]))
         actions = load_actions(find_parquet(ref.repo, ref.output_episode_index))
-        if len(actions) < 4:
+        if len(actions) < args.action_chunk_steps:
             continue
         trajectories.append(actions)
         episode_ids.append(
             f"{ref.task}/{ref.domain}/source-{ref.source_episode_index}"
         )
+        task_keys.append(ref.task)
     if args.fps > 0:
         fps = args.fps
     elif len(fps_values) == 1:
@@ -84,6 +96,8 @@ def main() -> None:
         hard_quantile=args.hard_quantile,
         minimum_score=args.minimum_score,
         workspace_quantile=args.workspace_quantile,
+        action_chunk_steps=args.action_chunk_steps,
+        task_keys=task_keys,
     )
     profile.to_json(args.output)
     print(
@@ -92,6 +106,7 @@ def main() -> None:
                 "output": str(args.output),
                 "calibration_scope": profile.calibration_scope,
                 "calibration_trajectories": profile.calibration_trajectories,
+                "calibration_chunks": profile.calibration_chunks,
                 "calibration_frames": profile.calibration_frames,
                 "split_manifest_sha256": profile.split_manifest_sha256,
             },

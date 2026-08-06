@@ -22,7 +22,6 @@ def generated_actions_to_tensor(
     config,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     actions = np.asarray(actions, dtype=np.float32)
-    expected = latent_frames * int(config.action_per_frame)
     executable = (latent_frames - 1) * int(config.action_per_frame)
     if actions.shape == (executable, 16):
         actions = np.pad(
@@ -30,10 +29,10 @@ def generated_actions_to_tensor(
             ((int(config.action_per_frame), 0), (0, 0)),
             constant_values=0,
         )
-    elif actions.shape != (expected, 16):
+    else:
         raise ValueError(
-            f"Expected executable [{executable},16] or packed [{expected},16], "
-            f"got {actions.shape}"
+            f"Expected only executable [{executable},16] actions; the generated "
+            f"conditioning block must be removed, got {actions.shape}"
         )
     padded = np.pad(actions, ((0, 0), (0, 1)), constant_values=0)
     aligned = padded[:, config.inverse_used_action_channel_ids]
@@ -48,6 +47,10 @@ def generated_actions_to_tensor(
     action_per_frame = int(config.action_per_frame)
     aligned = aligned.reshape(latent_frames, action_per_frame, -1)
     aligned_mask = aligned_mask.reshape(latent_frames, action_per_frame, -1)
+    # Frame zero is the current-state conditioning block. Inference clamps it
+    # to zero in normalized model space, so it is context rather than a target.
+    aligned[0] = 0.0
+    aligned_mask[0] = False
     return (
         torch.from_numpy(aligned.transpose(2, 0, 1)[..., None]).float(),
         torch.from_numpy(aligned_mask.transpose(2, 0, 1)[..., None]).bool(),
@@ -55,11 +58,35 @@ def generated_actions_to_tensor(
 
 
 class GeneratedChunkDataset(torch.utils.data.Dataset):
-    def __init__(self, selected_jsonl: str | Path, config):
+    def __init__(
+        self,
+        selected_jsonl: str | Path,
+        config,
+        *,
+        expected_split_sha256: str,
+        expected_selection_mode: str,
+    ):
         self.path = Path(selected_jsonl).expanduser().resolve()
         self.rows = read_jsonl(self.path)
         if not self.rows:
             raise ValueError(f"No selected pseudo chunks in {self.path}")
+        split_hashes = {
+            str(row.get("split_manifest_sha256", "")) for row in self.rows
+        }
+        if split_hashes != {expected_split_sha256}:
+            raise ValueError(
+                f"Pseudo data split hashes {split_hashes} do not match "
+                f"Stage-1 split {expected_split_sha256}"
+            )
+        selection_modes = {
+            str(row.get("rft_selection", {}).get("mode", ""))
+            for row in self.rows
+        }
+        if selection_modes != {expected_selection_mode}:
+            raise ValueError(
+                f"Pseudo data selection modes {selection_modes} do not match "
+                f"expected mode {expected_selection_mode}"
+            )
         self.config = config
         self.empty_emb = torch.load(
             config.empty_emb_path, map_location="cpu", weights_only=False
@@ -81,6 +108,11 @@ class GeneratedChunkDataset(torch.utils.data.Dataset):
             latents = latents[0]
         if latents.ndim != 4:
             raise ValueError(f"Pseudo latents must be [C,F,H,W], got {latents.shape}")
+        if int(latents.shape[1]) != int(self.config.frame_chunk_size):
+            raise ValueError(
+                f"Pseudo sample must contain exactly one model chunk "
+                f"F={self.config.frame_chunk_size}, got {latents.shape}"
+            )
         text_emb = torch.load(
             row["text_emb_path"], map_location="cpu", weights_only=False
         )
@@ -90,21 +122,74 @@ class GeneratedChunkDataset(torch.utils.data.Dataset):
                     f"Pseudo text embedding batch must be one: {text_emb.shape}"
                 )
             text_emb = text_emb[0]
-        if torch.rand(1).item() < float(config.cfg_prob):
+        if torch.rand(1).item() < float(self.config.cfg_prob):
             text_emb = self.empty_emb
             if text_emb.ndim == 3 and text_emb.shape[0] == 1:
                 text_emb = text_emb[0]
         actions, actions_mask = generated_actions_to_tensor(
             np.load(row["action_path"]),
             latent_frames=int(latents.shape[1]),
-            config=config,
+            config=self.config,
         )
         return {
             "latents": latents.float(),
             "actions": actions,
             "actions_mask": actions_mask,
-            "text_emb": text_emb.float(),
+            "text_emb": text_emb.to(dtype=self.config.param_dtype),
+            "latents_mask": torch.ones(latents.shape[1], dtype=torch.bool),
         }
+
+
+class FirstTransitionChunkDataset(torch.utils.data.Dataset):
+    """Project real trajectories onto the same fixed F=2 chunk as pseudo data.
+
+    The official real loader starts every segment with the conditioning frame.
+    Keeping its first two latent frames therefore preserves one normal
+    conditioning-to-target transition while making samples stackable without
+    padding unrelated future frames into an online RFT update.
+    """
+
+    def __init__(self, dataset, *, frame_chunk_size: int = 2):
+        if frame_chunk_size != 2:
+            raise ValueError(
+                "Online chunk RFT currently requires frame_chunk_size=2"
+            )
+        if len(dataset) == 0:
+            raise ValueError("Real dataset must be non-empty")
+        self.dataset = dataset
+        self.frame_chunk_size = frame_chunk_size
+
+    def __len__(self) -> int:
+        return len(self.dataset)
+
+    def __getitem__(self, index: int) -> dict:
+        item = dict(self.dataset[index])
+        frames = int(item["latents"].shape[1])
+        if frames < self.frame_chunk_size:
+            raise ValueError(
+                f"Real sample has F={frames}, expected at least "
+                f"{self.frame_chunk_size}"
+            )
+        for key in ("latents", "actions", "actions_mask"):
+            item[key] = item[key][:, : self.frame_chunk_size].contiguous()
+        item["latents_mask"] = torch.ones(
+            self.frame_chunk_size, dtype=torch.bool
+        )
+        return item
+
+
+def mixed_pad_latent_batch_collate(batch: list[dict], base_collate) -> dict:
+    """Run the official padded collate while retaining RFT source labels."""
+    sources = torch.stack(
+        [item["_rft_source"].reshape(()) for item in batch], dim=0
+    )
+    model_items = [
+        {key: value for key, value in item.items() if key != "_rft_source"}
+        for item in batch
+    ]
+    result = base_collate(model_items)
+    result["_rft_source"] = sources
+    return result
 
 
 class RatioMixedDataset(torch.utils.data.Dataset):
@@ -146,6 +231,10 @@ class RatioMixedDataset(torch.utils.data.Dataset):
         cycle, offset = divmod(index % self.length, self.cycle_size)
         if offset < self.real_slots:
             source_index = cycle * self.real_slots + offset
-            return self.real_dataset[source_index % len(self.real_dataset)]
+            item = dict(self.real_dataset[source_index % len(self.real_dataset)])
+            item["_rft_source"] = torch.tensor(0, dtype=torch.int64)
+            return item
         source_index = cycle * self.pseudo_slots + offset - self.real_slots
-        return self.pseudo_dataset[source_index % len(self.pseudo_dataset)]
+        item = dict(self.pseudo_dataset[source_index % len(self.pseudo_dataset)])
+        item["_rft_source"] = torch.tensor(1, dtype=torch.int64)
+        return item

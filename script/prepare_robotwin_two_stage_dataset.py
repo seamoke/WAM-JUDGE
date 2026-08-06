@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Prepare an immutable two-stage RoboTwin clean/randomized training split.
 
-The output is a training-only LeRobot view. Episode parquet, video, and latent
-files are linked from the official dataset, so the large payload is not copied.
+The output is a training-only LeRobot view. Video and latent payloads are linked
+from the official dataset. Stage-2 parquet files are rewritten without action.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ DOMAIN_DIRS = {
     "randomized": "lerobot_robotwin_eef_aug_500",
 }
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 DOMAIN_REPOSITORY_SUFFIXES = {
     "clean": (
@@ -155,6 +155,21 @@ def link_file(src: Path, dst: Path, mode: str) -> None:
         dst.symlink_to(os.path.relpath(src, dst.parent))
 
 
+def materialize_parquet(src: Path, dst: Path, *, redact_action: bool) -> None:
+    if not redact_action:
+        link_file(src, dst, "hardlink")
+        return
+    import pyarrow.parquet as pq
+
+    if dst.exists() or dst.is_symlink():
+        raise FileExistsError(dst)
+    table = pq.read_table(src)
+    if "action" not in table.column_names:
+        raise ValueError(f"Stage-2 source parquet has no action column: {src}")
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(table.drop(["action"]), dst, compression="zstd")
+
+
 def episode_chunk(episode_index: int, chunks_size: int) -> int:
     return episode_index // chunks_size
 
@@ -174,6 +189,17 @@ def reindexed_rows(
     return result
 
 
+def redact_episode_action_stats(rows: list[dict]) -> list[dict]:
+    result = []
+    for source in rows:
+        row = dict(source)
+        if isinstance(row.get("stats"), dict):
+            row["stats"] = dict(row["stats"])
+            row["stats"].pop("action", None)
+        result.append(row)
+    return result
+
+
 def link_episode_payload(
     *,
     src_repo: Path,
@@ -183,6 +209,7 @@ def link_episode_payload(
     destination_index: int,
     chunks_size: int,
     link_mode: str,
+    redact_action: bool,
 ) -> dict:
     source_chunk = episode_chunk(source_index, chunks_size)
     destination_chunk = episode_chunk(destination_index, chunks_size)
@@ -200,7 +227,10 @@ def link_episode_payload(
         / destination_chunk_tag
         / f"{destination_episode_tag}.parquet"
     )
-    link_file(source_parquet, destination_parquet, link_mode)
+    if redact_action:
+        materialize_parquet(source_parquet, destination_parquet, redact_action=True)
+    else:
+        link_file(source_parquet, destination_parquet, link_mode)
 
     linked_videos = 0
     missing_videos = []
@@ -274,6 +304,7 @@ def materialize_task(
     dst_repo: Path,
     selected_indices: list[int],
     link_mode: str,
+    redact_action: bool,
 ) -> dict:
     meta_dir = src_repo / "meta"
     info = read_json(meta_dir / "info.json")
@@ -290,9 +321,14 @@ def materialize_task(
     for optional_name in ("episodes_stats.jsonl", "episodes_ori.jsonl"):
         source_path = meta_dir / optional_name
         if source_path.is_file():
+            optional_rows = reindexed_rows(
+                read_jsonl(source_path), selected_indices
+            )
+            if redact_action and optional_name == "episodes_stats.jsonl":
+                optional_rows = redact_episode_action_stats(optional_rows)
             write_jsonl(
                 destination_meta / optional_name,
-                reindexed_rows(read_jsonl(source_path), selected_indices),
+                optional_rows,
             )
 
     tasks_path = meta_dir / "tasks.jsonl"
@@ -311,6 +347,7 @@ def materialize_task(
             destination_index=destination_index,
             chunks_size=chunks_size,
             link_mode=link_mode,
+            redact_action=redact_action,
         )
         linked_videos += payload["linked_videos"]
         if payload["missing_videos"]:
@@ -334,6 +371,11 @@ def materialize_task(
     info["total_videos"] = linked_videos
     info["total_chunks"] = total_chunks
     info["splits"] = {"train": f"0:{total_episodes}"}
+    if redact_action:
+        info.get("features", {}).pop("action", None)
+        info["action_visibility"] = "redacted"
+    else:
+        info["action_visibility"] = "visible"
     write_json(destination_meta / "info.json", info)
 
     return {
@@ -342,6 +384,7 @@ def materialize_task(
         "linked_videos": linked_videos,
         "missing_video_episodes": len(missing_videos),
         "missing_latent_segments": missing_latent_segments,
+        "action_visibility": "redacted" if redact_action else "visible",
         "source_to_destination_index": {
             str(source_index): destination_index
             for destination_index, source_index in enumerate(selected_indices)
@@ -384,6 +427,8 @@ def audit_prepared_root(
 ) -> dict:
     if int(manifest.get("schema_version", -1)) != SCHEMA_VERSION:
         raise ValueError("Unsupported or missing split manifest schema_version")
+    if manifest.get("stage2_action_statistics_redacted") is not True:
+        raise ValueError("Manifest does not guarantee Stage-2 action-stat redaction")
 
     per_domain_total = int(manifest["split"]["per_domain_total"])
     stage1_count = int(manifest["split"]["stage1_per_domain"])
@@ -438,6 +483,26 @@ def audit_prepared_root(
                     raise ValueError(f"{relative_repo}: non-contiguous episode indices")
 
                 info = read_json(repo / "meta" / "info.json")
+                expected_visibility = "visible" if stage == "stage1" else "redacted"
+                if info.get("action_visibility") != expected_visibility:
+                    raise ValueError(
+                        f"{relative_repo}: expected action_visibility="
+                        f"{expected_visibility}, got {info.get('action_visibility')}"
+                    )
+                info_has_action = "action" in info.get("features", {})
+                if info_has_action != (stage == "stage1"):
+                    raise ValueError(
+                        f"{relative_repo}: info.json action feature violates {stage} policy"
+                    )
+                stats_path = repo / "meta" / "episodes_stats.jsonl"
+                if stats_path.is_file():
+                    for stats_row in read_jsonl(stats_path):
+                        stats_has_action = "action" in stats_row.get("stats", {})
+                        if stats_has_action != (stage == "stage1"):
+                            raise ValueError(
+                                f"{stats_path}: action statistics violate {stage} "
+                                "visibility policy"
+                            )
                 chunks_size = int(info.get("chunks_size", 1000))
                 for episode in episodes:
                     episode_index = int(episode["episode_index"])
@@ -451,6 +516,13 @@ def audit_prepared_root(
                     )
                     if not parquet.is_file():
                         raise FileNotFoundError(parquet)
+                    import pyarrow.parquet as pq
+
+                    parquet_has_action = "action" in pq.read_schema(parquet).names
+                    if parquet_has_action != (stage == "stage1"):
+                        raise ValueError(
+                            f"{parquet}: action column violates {stage} visibility policy"
+                        )
 
                     for action_config in episode.get("action_config", []):
                         stage_segments[stage] += 1
@@ -509,6 +581,9 @@ def audit_prepared_root(
         "stage2_valid_segments": stage_valid_segments["stage2"],
         "missing_latent_segments": len(missing_latent_segments),
         "manifest_sha256": manifest_sha256,
+        "stage1_action_visible": True,
+        "stage2_action_redacted": True,
+        "stage2_action_statistics_redacted": True,
     }
 
 
@@ -564,6 +639,9 @@ def prepare_dataset(args: argparse.Namespace) -> dict:
         "output_root": str(output_root),
         "expected_tasks": args.expected_tasks,
         "link_mode": args.link_mode,
+        "stage1_action_visible": True,
+        "stage2_action_redacted": True,
+        "stage2_action_statistics_redacted": True,
         "split": {
             "seed": args.seed,
             "ranking": "sha256(seed:domain:task:episode_index)",
@@ -622,6 +700,7 @@ def prepare_dataset(args: argparse.Namespace) -> dict:
                         dst_repo=preparing_root / relative_repo,
                         selected_indices=selected_indices,
                         link_mode=args.link_mode,
+                        redact_action=(stage == "stage2"),
                     )
                     domain_row[f"{stage}_output_repo"] = str(relative_repo)
                     domain_row[f"{stage}_output"] = result

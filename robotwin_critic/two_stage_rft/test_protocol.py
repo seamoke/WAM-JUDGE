@@ -36,7 +36,10 @@ class ProtocolTest(unittest.TestCase):
                     }
                 task["domains"][domain] = domain_row
             manifest = {
-                "schema_version": 1,
+                "schema_version": 2,
+                "stage1_action_visible": True,
+                "stage2_action_redacted": True,
+                "stage2_action_statistics_redacted": True,
                 "split": {
                     "per_domain_total": 50,
                     "stage1_per_domain": 30,
