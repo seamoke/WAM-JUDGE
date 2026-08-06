@@ -171,6 +171,31 @@ class OnlineIterationTest(unittest.TestCase):
             self.assertEqual((output2 / "vae").resolve(), (base / "vae").resolve())
             self.assertFalse((output2 / "online_rft_model.json").is_symlink())
 
+    def test_stage_model_can_materialize_updated_transformer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            base = root / "base"
+            updated = root / "checkpoint/transformer"
+            (base / "transformer").mkdir(parents=True)
+            (base / "vae").mkdir()
+            updated.mkdir(parents=True)
+            (base / "transformer/config.json").write_text("{}")
+            (updated / "config.json").write_text("{}")
+            (updated / "weights.bin").write_bytes(b"weights")
+
+            output = root / "staged"
+            manifest = stage_model(
+                base,
+                updated,
+                output,
+                move_transformer=True,
+            )
+
+            self.assertFalse(updated.exists())
+            self.assertFalse((output / "transformer").is_symlink())
+            self.assertEqual((output / "transformer/weights.bin").read_bytes(), b"weights")
+            self.assertEqual(manifest["transformer_storage"], "materialized")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,36 +6,48 @@ PROJECT_ROOT="${PROJECT_ROOT:-$(dirname "$SCRIPT_DIR")}"
 LINGBOT_ROOT="${LINGBOT_ROOT:-$(dirname "$PROJECT_ROOT")}"
 PYTHON="${PYTHON:-$PROJECT_ROOT/.venv/bin/python}"
 
-STAGE2_DATA_ROOT=""
-WAM_MODEL=""
-VLAC_MODEL=""
+LOCAL_CONFIG="${ROBOTWIN_STAGE2_RFT_CONFIG:-$PROJECT_ROOT/.local/robotwin_stage2_rft.env}"
+if [[ -s "$LOCAL_CONFIG" ]]; then
+  # shellcheck disable=SC1090
+  source "$LOCAL_CONFIG"
+fi
+
+STAGE2_DATA_ROOT="${STAGE2_DATA_ROOT:-}"
+ORIGINAL_ROBOTWIN_ROOT="${ORIGINAL_ROBOTWIN_ROOT:-}"
+REAL_DATA_ROOT="${REAL_DATA_ROOT:-}"
+REAL_DATA_LINK_MODE="${REAL_DATA_LINK_MODE:-hardlink}"
+REAL_DATA_MODE="${REAL_DATA_MODE:-stage1-stage2-visible}"
+WAM_MODEL="${WAM_MODEL:-}"
+VLAC_MODEL="${VLAC_MODEL:-}"
 BASE_MODEL="${BASE_MODEL:-$LINGBOT_ROOT/models/lingbot-va-base}"
-OUTPUT_ROOT=""
-GPU_IDS="0,1,2,3"
-SWANLAB_PROJECT="lingbot-va-robotwin-rft"
-SWANLAB_GROUP="robotwin-stage1-real-stage2-pseudo"
-SWANLAB_NAME="robotwin-stage2-online-dual-rft"
+OUTPUT_ROOT="${OUTPUT_ROOT:-}"
+ONLINE_ROOT="${ONLINE_ROOT:-}"
+GPU_IDS="${GPU_IDS:-0,1,2,3}"
+SWANLAB_PROJECT="${SWANLAB_PROJECT:-lingbot-va-robotwin}"
+SWANLAB_GROUP="${SWANLAB_GROUP:-robotwin-stage1-real-stage2-pseudo}"
+SWANLAB_NAME="${SWANLAB_NAME:-robotwin-stage2-online-dual-rft}"
 SWANLAB_API_KEY_FILE="${SWANLAB_API_KEY_FILE:-$PROJECT_ROOT/.secrets/swanlab_api_key}"
-EXPECTED_PER_DOMAIN_TOTAL=50
-EXPECTED_STAGE1_PER_DOMAIN=30
-BUFFER_CAPACITY=512
-Q_PER_ROUND=16
-CANDIDATES_PER_Q=8
-INFERENCE_BATCH_SIZE_PER_GPU=2
-VLAC_BATCH_SIZE_PER_GPU=4
-TRAIN_BATCH_SIZE_PER_GPU=2
-TRAIN_GLOBAL_BATCH=64
-PSEUDO_EPOCHS_PER_UPDATE=3
-REAL_FRACTION=0.5
-MAX_UPDATES=1000
-MIN_ACTION_SCORE=0.75
-MIN_PROCESS_SCORE=5.0
-MAX_PSEUDO_PER_CONTEXT=0
-HISTORY_FRAMES=4
-CONTEXT_POOL_MULTIPLIER=2.0
-MAX_EPISODE_FRAMES=500
-PREPARE_ONLY=0
-FRESH=0
+EXPECTED_PER_DOMAIN_TOTAL="${EXPECTED_PER_DOMAIN_TOTAL:-50}"
+EXPECTED_STAGE1_PER_DOMAIN="${EXPECTED_STAGE1_PER_DOMAIN:-30}"
+BUFFER_CAPACITY="${BUFFER_CAPACITY:-512}"
+Q_PER_ROUND="${Q_PER_ROUND:-128}"
+CANDIDATES_PER_Q="${CANDIDATES_PER_Q:-8}"
+INFERENCE_BATCH_SIZE_PER_GPU="${INFERENCE_BATCH_SIZE_PER_GPU:-2}"
+VLAC_BATCH_SIZE_PER_GPU="${VLAC_BATCH_SIZE_PER_GPU:-4}"
+TRAIN_BATCH_SIZE_PER_GPU="${TRAIN_BATCH_SIZE_PER_GPU:-8}"
+TRAIN_GLOBAL_BATCH="${TRAIN_GLOBAL_BATCH:-32}"
+PSEUDO_EPOCHS_PER_UPDATE="${PSEUDO_EPOCHS_PER_UPDATE:-3}"
+REAL_FRACTION="${REAL_FRACTION:-0.5}"
+MAX_UPDATES="${MAX_UPDATES:-1000}"
+MODEL_SAVE_EVERY_UPDATES="${MODEL_SAVE_EVERY_UPDATES:-50}"
+MIN_ACTION_SCORE="${MIN_ACTION_SCORE:-0.75}"
+MIN_PROCESS_SCORE="${MIN_PROCESS_SCORE:-5.0}"
+MAX_PSEUDO_PER_CONTEXT="${MAX_PSEUDO_PER_CONTEXT:-0}"
+HISTORY_FRAMES="${HISTORY_FRAMES:-4}"
+CONTEXT_POOL_MULTIPLIER="${CONTEXT_POOL_MULTIPLIER:-2.0}"
+MAX_EPISODE_FRAMES="${MAX_EPISODE_FRAMES:-500}"
+PREPARE_ONLY="${PREPARE_ONLY:-0}"
+FRESH="${FRESH:-0}"
 
 usage() {
   cat <<'EOF'
@@ -49,20 +61,32 @@ Usage:
 Required:
   --stage2-data-root  Prepared split root or its stage2/ directory. Its sibling
                       stage1/ must contain the action-labeled calibration data.
+  --original-robotwin-root PATH
+                      Original RoboTwin root used to restore the selected
+                      Stage-2 action labels. Optional if manifest path exists.
   --wam-model         Complete WAM root, transformer checkpoint root, or the
                       transformer/ directory itself.
   --vlac-model        Trained VLAC checkpoint containing config.json.
 
 Common options:
   --base-model PATH   Complete WAM skeleton used with transformer-only checkpoints.
+  --real-data-root PATH
+                      Existing selected action-visible replay root. If absent,
+                      it is built at PREPARED_ROOT/action_visible_real.
+  --real-data-link-mode hardlink|copy|symlink (use copy before migration).
   --output-root PATH  Run directory. Defaults to a timestamped train_out path.
   --gpu-ids IDS       Comma-separated GPU IDs (default: 0,1,2,3).
   --fresh             Delete OUTPUT_ROOT before starting. Never implied.
   --prepare-only      Build Action Critic and Stage-2 contexts, then exit.
   --buffer-capacity N --q-per-round N --candidates-per-q N
   --train-global-batch N --real-fraction X --max-updates N
+  --model-save-every-updates N
   --swanlab-project NAME --swanlab-group NAME --swanlab-name NAME
   --swanlab-api-key-file PATH
+
+With no arguments, values are read from:
+  code/.local/robotwin_stage2_rft.env
+Override this path with ROBOTWIN_STAGE2_RFT_CONFIG.
 EOF
 }
 
@@ -76,6 +100,9 @@ require_value() {
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --stage2-data-root) require_value "$@"; STAGE2_DATA_ROOT="$2"; shift 2 ;;
+    --original-robotwin-root) require_value "$@"; ORIGINAL_ROBOTWIN_ROOT="$2"; shift 2 ;;
+    --real-data-root) require_value "$@"; REAL_DATA_ROOT="$2"; shift 2 ;;
+    --real-data-link-mode) require_value "$@"; REAL_DATA_LINK_MODE="$2"; shift 2 ;;
     --wam-model) require_value "$@"; WAM_MODEL="$2"; shift 2 ;;
     --vlac-model) require_value "$@"; VLAC_MODEL="$2"; shift 2 ;;
     --base-model) require_value "$@"; BASE_MODEL="$2"; shift 2 ;;
@@ -91,6 +118,7 @@ while [[ $# -gt 0 ]]; do
     --pseudo-epochs-per-update) require_value "$@"; PSEUDO_EPOCHS_PER_UPDATE="$2"; shift 2 ;;
     --real-fraction) require_value "$@"; REAL_FRACTION="$2"; shift 2 ;;
     --max-updates) require_value "$@"; MAX_UPDATES="$2"; shift 2 ;;
+    --model-save-every-updates) require_value "$@"; MODEL_SAVE_EVERY_UPDATES="$2"; shift 2 ;;
     --min-action-score) require_value "$@"; MIN_ACTION_SCORE="$2"; shift 2 ;;
     --min-process-score) require_value "$@"; MIN_PROCESS_SCORE="$2"; shift 2 ;;
     --max-pseudo-per-context) require_value "$@"; MAX_PSEUDO_PER_CONTEXT="$2"; shift 2 ;;
@@ -140,13 +168,18 @@ test -s "$PREPARED_DATA_ROOT/split_manifest.json"
 test -s "$PREPARED_DATA_ROOT/PREPARATION_COMPLETE.json"
 test -s "$VLAC_MODEL/config.json"
 
+if [[ -z "$REAL_DATA_ROOT" ]]; then
+  REAL_DATA_ROOT="$PREPARED_DATA_ROOT/action_visible_real"
+fi
+REAL_DATA_ROOT="$(realpath -m "$REAL_DATA_ROOT")"
+
 if [[ -z "$OUTPUT_ROOT" ]]; then
   OUTPUT_ROOT="$LINGBOT_ROOT/train_out/critic/robotwin/stage2_online_rft_$(date +%Y%m%d_%H%M%S)"
 fi
 OUTPUT_ROOT="$(realpath -m "$OUTPUT_ROOT")"
 if [[ "$FRESH" == "1" && -e "$OUTPUT_ROOT" ]]; then
   case "$OUTPUT_ROOT" in
-    /|"$PROJECT_ROOT"|"$LINGBOT_ROOT"|"$PREPARED_DATA_ROOT"|"$STAGE2_DATA_ROOT"|"$WAM_MODEL"|"$VLAC_MODEL")
+    /|"$PROJECT_ROOT"|"$LINGBOT_ROOT"|"$PREPARED_DATA_ROOT"|"$STAGE2_DATA_ROOT"|"$REAL_DATA_ROOT"|"$WAM_MODEL"|"$VLAC_MODEL")
       echo "Refusing to delete protected path: $OUTPUT_ROOT" >&2
       exit 2
       ;;
@@ -163,7 +196,26 @@ echo "prepared_data_root=$PREPARED_DATA_ROOT"
 echo "stage2_data_root=$STAGE2_DATA_ROOT"
 echo "wam_model=$WAM_MODEL"
 echo "vlac_model=$VLAC_MODEL"
+echo "real_data_root=$REAL_DATA_ROOT"
 echo "output_root=$OUTPUT_ROOT"
+
+if [[ "$REAL_DATA_MODE" == "stage1-stage2-visible" ]]; then
+  if [[ ! -s "$REAL_DATA_ROOT/ACTION_VISIBLE_COMPLETE.json" ]]; then
+    source_args=()
+    if [[ -n "$ORIGINAL_ROBOTWIN_ROOT" ]]; then
+      source_args+=(--source-root "$ORIGINAL_ROBOTWIN_ROOT")
+    fi
+    "$PYTHON" -m robotwin_critic.two_stage_rft.prepare_action_visible_real \
+      --prepared-root "$PREPARED_DATA_ROOT" \
+      --output-root "$REAL_DATA_ROOT" \
+      --link-mode "$REAL_DATA_LINK_MODE" \
+      "${source_args[@]}"
+  fi
+  "$PYTHON" -m robotwin_critic.two_stage_rft.prepare_action_visible_real \
+    --prepared-root "$PREPARED_DATA_ROOT" \
+    --output-root "$REAL_DATA_ROOT" \
+    --verify-only
+fi
 
 ACTION_PROFILE="$PART2_ROOT/stage1_kinematic_profile.json"
 CONTEXTS="$PART2_ROOT/stage2_video_contexts.jsonl"
@@ -205,7 +257,8 @@ if [[ "$PREPARE_ONLY" == "1" ]]; then
   exit 0
 fi
 
-ONLINE_ROOT="$OUTPUT_ROOT/online"
+ONLINE_ROOT="${ONLINE_ROOT:-$OUTPUT_ROOT/online}"
+ONLINE_ROOT="$(realpath -m "$ONLINE_ROOT")"
 mkdir -p "$ONLINE_ROOT"
 if [[ -s "$WAM_MODEL/vae/config.json" && -s "$WAM_MODEL/transformer/config.json" ]]; then
   INITIAL_MODEL="$WAM_MODEL"
@@ -235,12 +288,14 @@ if [[ -z "${SWANLAB_API_KEY:-}" ]]; then
 fi
 
 export PROJECT_ROOT LINGBOT_ROOT PREPARED_DATA_ROOT PART2_ROOT ONLINE_ROOT
+export REAL_DATA_ROOT REAL_DATA_MODE
 export INITIAL_MODEL VLAC_MODEL
 export CONTEXTS ACTION_PROFILE
 export INFER_GPU_IDS="$GPU_IDS"
+export INFER_BATCH_SIZE_PER_GPU="$INFERENCE_BATCH_SIZE_PER_GPU"
 export Q_PER_ROUND INFER_BATCH_SIZE_PER_GPU CANDIDATES_PER_Q VLAC_BATCH_SIZE_PER_GPU
 export BUFFER_CAPACITY TRAIN_BATCH_SIZE_PER_GPU TRAIN_GLOBAL_BATCH
-export PSEUDO_EPOCHS_PER_UPDATE REAL_FRACTION MAX_UPDATES
+export PSEUDO_EPOCHS_PER_UPDATE REAL_FRACTION MAX_UPDATES MODEL_SAVE_EVERY_UPDATES
 export MIN_ACTION_SCORE MIN_PROCESS_SCORE MAX_PSEUDO_PER_CONTEXT
 export ACTION_GATE_POLICY=score_with_safety_gates
 export ACTION_WORKSPACE_SCOPE=global

@@ -17,6 +17,8 @@ WAM_PYTHON="${WAM_PYTHON:-$PROJECT_ROOT/.venv/bin/python}"
 RFT_SELECTION_MODE="${RFT_SELECTION_MODE:-dual}"
 REAL_CHUNK_MODE="${REAL_CHUNK_MODE:-full}"
 REAL_FRACTION="${REAL_FRACTION:-0.5}"
+REAL_DATA_MODE="${REAL_DATA_MODE:-stage1-stage2-visible}"
+REAL_DATA_ROOT="${REAL_DATA_ROOT:-}"
 OUTER_STEP="${RFT_OUTER_STEP:-0}"
 SWANLAB_STEP_OFFSET="${RFT_SWANLAB_STEP_OFFSET:-0}"
 RUN_ID="${RUN_ID:-robotwin_dual_rft_joint_full_${NUM_STEPS}steps_$(date +%Y%m%d_%H%M%S)}"
@@ -28,6 +30,23 @@ test -s "$STAGE1_CHECKPOINT/transformer/config.json"
 test -s "$PSEUDO_JSONL"
 test -d "$PREPARED_DATA_ROOT/stage1"
 test -s "$PREPARED_DATA_ROOT/stage1/empty_emb.pt"
+case "$REAL_DATA_MODE" in
+  stage1)
+    REAL_DATA_ROOT="${REAL_DATA_ROOT:-$PREPARED_DATA_ROOT/stage1}"
+    ;;
+  stage1-stage2)
+    REAL_DATA_ROOT="${REAL_DATA_ROOT:-$($WAM_PYTHON -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_root"])' "$PREPARED_DATA_ROOT/split_manifest.json")}"
+    ;;
+  stage1-stage2-visible)
+    REAL_DATA_ROOT="${REAL_DATA_ROOT:-$PREPARED_DATA_ROOT/action_visible_real}"
+    test -s "$REAL_DATA_ROOT/ACTION_VISIBLE_COMPLETE.json"
+    ;;
+  *)
+    echo "Unsupported REAL_DATA_MODE: $REAL_DATA_MODE" >&2
+    exit 2
+    ;;
+esac
+test -d "$REAL_DATA_ROOT"
 if [[ -e "$OUT" ]]; then
   echo "Refusing to overwrite existing run: $OUT" >&2
   exit 2
@@ -41,8 +60,12 @@ GRADIENT_ACCUMULATION_STEPS=$((TARGET_GLOBAL_BATCH / denominator))
 mkdir -p "$OUT"
 
 export WAN_VA_MODEL_PATH="$STAGE1_CHECKPOINT"
-export ROBOTWIN_DATASET_PATH="$PREPARED_DATA_ROOT/stage1"
-export ROBOTWIN_EMPTY_EMB_PATH="$PREPARED_DATA_ROOT/stage1/empty_emb.pt"
+export ROBOTWIN_DATASET_PATH="$REAL_DATA_ROOT"
+if [[ -s "$REAL_DATA_ROOT/empty_emb.pt" ]]; then
+  export ROBOTWIN_EMPTY_EMB_PATH="$REAL_DATA_ROOT/empty_emb.pt"
+else
+  export ROBOTWIN_EMPTY_EMB_PATH="$PREPARED_DATA_ROOT/stage1/empty_emb.pt"
+fi
 export LINGBOT_TRAIN_SAVE_ROOT="$OUT"
 export LINGBOT_TRAIN_NUM_STEPS="$NUM_STEPS"
 export LINGBOT_TRAIN_BATCH_SIZE="$TRAIN_BATCH_SIZE_PER_GPU"
@@ -64,7 +87,7 @@ export LINGBOT_ENABLE_SWANLAB="${ENABLE_SWANLAB:-1}"
 export LINGBOT_SWANLAB_MODE="${LINGBOT_SWANLAB_MODE:-online}"
 export LINGBOT_SWANLAB_LOG_DIR="$OUT/swanlab"
 export LINGBOT_SWANLAB_EXPERIMENT_NAME="${SWANLAB_EXPERIMENT_NAME:-$RUN_ID}"
-export LINGBOT_SWANLAB_PROJECT="${LINGBOT_SWANLAB_PROJECT:-lingbot-va-robotwin-rft}"
+export LINGBOT_SWANLAB_PROJECT="${LINGBOT_SWANLAB_PROJECT:-lingbot-va-robotwin}"
 if [[ -z "${SWANLAB_API_KEY:-}" && -s "$PROJECT_ROOT/.secrets/swanlab_api_key" ]]; then
   export SWANLAB_API_KEY="$(tr -d '[:space:]' < "$PROJECT_ROOT/.secrets/swanlab_api_key")"
 fi
@@ -75,7 +98,8 @@ export PYTORCH_ALLOC_CONF=expandable_segments:True
 {
   echo "run_id=$RUN_ID"
   echo "stage1_checkpoint=$STAGE1_CHECKPOINT"
-  echo "real_dataset=$PREPARED_DATA_ROOT/stage1"
+  echo "real_dataset=$REAL_DATA_ROOT"
+  echo "real_data_mode=$REAL_DATA_MODE"
   echo "pseudo_jsonl=$PSEUDO_JSONL"
   echo "selection_mode=$RFT_SELECTION_MODE"
   echo "real_source_update_ratio=$REAL_FRACTION"
@@ -103,6 +127,7 @@ set +e
   --split-manifest "$PREPARED_DATA_ROOT/split_manifest.json" \
   --expected-selection-mode "$RFT_SELECTION_MODE" \
   --real-fraction "$REAL_FRACTION" \
+  --real-data-mode "$REAL_DATA_MODE" \
   --real-chunk-mode "$REAL_CHUNK_MODE" \
   --outer-step "$OUTER_STEP" \
   --swanlab-step-offset "$SWANLAB_STEP_OFFSET" \
