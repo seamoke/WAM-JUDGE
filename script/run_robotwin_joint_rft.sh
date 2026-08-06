@@ -17,6 +17,7 @@ WAM_PYTHON="${WAM_PYTHON:-$PROJECT_ROOT/.venv/bin/python}"
 RFT_SELECTION_MODE="${RFT_SELECTION_MODE:-dual}"
 REAL_CHUNK_MODE="${REAL_CHUNK_MODE:-full}"
 REAL_FRACTION="${REAL_FRACTION:-0.5}"
+REAL_DATA_MODE="${REAL_DATA_MODE:-stage1-stage2}"
 OUTER_STEP="${RFT_OUTER_STEP:-0}"
 SWANLAB_STEP_OFFSET="${RFT_SWANLAB_STEP_OFFSET:-0}"
 RUN_ID="${RUN_ID:-robotwin_dual_rft_joint_full_${NUM_STEPS}steps_$(date +%Y%m%d_%H%M%S)}"
@@ -28,6 +29,12 @@ test -s "$STAGE1_CHECKPOINT/transformer/config.json"
 test -s "$PSEUDO_JSONL"
 test -d "$PREPARED_DATA_ROOT/stage1"
 test -s "$PREPARED_DATA_ROOT/stage1/empty_emb.pt"
+if [[ "$REAL_DATA_MODE" == "stage1-stage2" ]]; then
+  REAL_DATA_ROOT="$($WAM_PYTHON -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_root"])' "$PREPARED_DATA_ROOT/split_manifest.json")"
+else
+  REAL_DATA_ROOT="$PREPARED_DATA_ROOT/stage1"
+fi
+test -d "$REAL_DATA_ROOT"
 if [[ -e "$OUT" ]]; then
   echo "Refusing to overwrite existing run: $OUT" >&2
   exit 2
@@ -41,7 +48,7 @@ GRADIENT_ACCUMULATION_STEPS=$((TARGET_GLOBAL_BATCH / denominator))
 mkdir -p "$OUT"
 
 export WAN_VA_MODEL_PATH="$STAGE1_CHECKPOINT"
-export ROBOTWIN_DATASET_PATH="$PREPARED_DATA_ROOT/stage1"
+export ROBOTWIN_DATASET_PATH="$REAL_DATA_ROOT"
 export ROBOTWIN_EMPTY_EMB_PATH="$PREPARED_DATA_ROOT/stage1/empty_emb.pt"
 export LINGBOT_TRAIN_SAVE_ROOT="$OUT"
 export LINGBOT_TRAIN_NUM_STEPS="$NUM_STEPS"
@@ -75,7 +82,8 @@ export PYTORCH_ALLOC_CONF=expandable_segments:True
 {
   echo "run_id=$RUN_ID"
   echo "stage1_checkpoint=$STAGE1_CHECKPOINT"
-  echo "real_dataset=$PREPARED_DATA_ROOT/stage1"
+  echo "real_dataset=$REAL_DATA_ROOT"
+  echo "real_data_mode=$REAL_DATA_MODE"
   echo "pseudo_jsonl=$PSEUDO_JSONL"
   echo "selection_mode=$RFT_SELECTION_MODE"
   echo "real_source_update_ratio=$REAL_FRACTION"
@@ -103,6 +111,7 @@ set +e
   --split-manifest "$PREPARED_DATA_ROOT/split_manifest.json" \
   --expected-selection-mode "$RFT_SELECTION_MODE" \
   --real-fraction "$REAL_FRACTION" \
+  --real-data-mode "$REAL_DATA_MODE" \
   --real-chunk-mode "$REAL_CHUNK_MODE" \
   --outer-step "$OUTER_STEP" \
   --swanlab-step-offset "$SWANLAB_STEP_OFFSET" \

@@ -194,6 +194,7 @@ run_ready_update() {
   RFT_OUTER_STEP="$update_index" \
   RFT_SWANLAB_STEP_OFFSET="$((update_index * UPDATE_STEPS))" \
   REAL_FRACTION="$REAL_FRACTION" \
+  REAL_DATA_MODE=stage1-stage2 \
   REAL_CHUNK_MODE=first-transition \
   ACTIVATION_CHECKPOINTING="$TRAIN_ACTIVATION_CHECKPOINTING" \
   WARMUP_STEPS=1 \

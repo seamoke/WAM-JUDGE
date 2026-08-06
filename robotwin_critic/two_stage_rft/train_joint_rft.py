@@ -125,6 +125,53 @@ def summarize_pseudo_buffer(path: str | Path) -> dict[str, float]:
     return result
 
 
+def filter_real_dataset_by_split(
+    dataset, split_manifest: str | Path, *, stages: tuple[str, ...]
+) -> dict[str, int]:
+    """Restrict the official source loader to manifest-selected episodes."""
+    manifest = json.loads(Path(split_manifest).read_text(encoding="utf-8"))
+    allowed: dict[str, set[int]] = {}
+    for task in manifest["tasks"]:
+        for domain in task["domains"].values():
+            repo = str(Path(domain["source_repo"]).resolve())
+            episode_ids = allowed.setdefault(repo, set())
+            for stage in stages:
+                episode_ids.update(
+                    int(index)
+                    for index in domain[f"{stage}_source_episode_indices"]
+                )
+
+    found: set[str] = set()
+    kept_segments = 0
+    for source_dataset in dataset._datasets:
+        repo = str(Path(source_dataset.root).resolve())
+        selected = allowed.get(repo)
+        if selected is None:
+            source_dataset.new_metas = []
+            continue
+        found.add(repo)
+        source_dataset.new_metas = [
+            meta
+            for meta in source_dataset.new_metas
+            if int(meta["episode_index"]) in selected
+        ]
+        kept_segments += len(source_dataset.new_metas)
+    missing = sorted(set(allowed) - found)
+    if missing:
+        raise RuntimeError(f"Real source repos missing from official loader: {missing[:5]}")
+    dataset._datasets = [source for source in dataset._datasets if source.new_metas]
+    if not dataset._datasets or kept_segments <= 0:
+        raise RuntimeError("Manifest filtering removed every real training segment")
+    dataset.item_id_to_dataset_id, dataset.acc_dset_num = (
+        dataset._get_item_id_to_dataset_id()
+    )
+    return {
+        "source_repos": len(found),
+        "selected_episodes": sum(len(indices) for indices in allowed.values()),
+        "kept_segments": kept_segments,
+    }
+
+
 def write_source_counts(
     trainer, counts: torch.Tensor, real_fraction: float
 ) -> dict | None:
@@ -162,6 +209,11 @@ def main() -> None:
     )
     parser.add_argument("--real-fraction", type=float, default=0.7)
     parser.add_argument(
+        "--real-data-mode",
+        choices=("stage1", "stage1-stage2"),
+        default="stage1-stage2",
+    )
+    parser.add_argument(
         "--real-chunk-mode",
         choices=("full", "first-transition"),
         default="full",
@@ -193,9 +245,20 @@ def main() -> None:
             external_swanlab_run = None
 
             def mixed_factory(config, num_init_worker):
+                if args.real_data_mode == "stage1-stage2":
+                    manifest = json.loads(
+                        args.split_manifest.read_text(encoding="utf-8")
+                    )
+                    config.dataset_path = str(Path(manifest["source_root"]).resolve())
                 real = MultiLatentLeRobotDataset(
                     config=config, num_init_worker=num_init_worker
                 )
+                if args.real_data_mode == "stage1-stage2":
+                    filter_real_dataset_by_split(
+                        real,
+                        args.split_manifest,
+                        stages=("stage1", "stage2"),
+                    )
                 if args.real_chunk_mode == "first-transition":
                     real = FirstTransitionChunkDataset(
                         real,
