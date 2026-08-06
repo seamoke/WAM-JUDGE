@@ -12,18 +12,18 @@ VLAC_ADAPTER="${VLAC_ADAPTER:-}"
 WAM_PYTHON="${WAM_PYTHON:-$PROJECT_ROOT/.venv/bin/python}"
 VLAC_PYTHON="${VLAC_PYTHON:-$LINGBOT_ROOT/train_out/critic/robotwin/envs/vlac/bin/python}"
 
-# Sampling throughput hyperparameters. With four GPUs, defaults give 16 Q and
-# 16*8=128 candidates per collection round.
+# Sampling throughput hyperparameters. With four GPUs, defaults give 128 Q and
+# 128*8=1024 candidates per collection round.
 INFER_GPU_IDS="${INFER_GPU_IDS:-0,1,2,3}"
-Q_PER_ROUND="${Q_PER_ROUND:-16}"
+Q_PER_ROUND="${Q_PER_ROUND:-128}"
 INFER_BATCH_SIZE_PER_GPU="${INFER_BATCH_SIZE_PER_GPU:-1}"
 CANDIDATES_PER_Q="${CANDIDATES_PER_Q:-8}"
 VLAC_BATCH_SIZE_PER_GPU="${VLAC_BATCH_SIZE_PER_GPU:-4}"
 
 # Replay/update hyperparameters. Increase TRAIN_BATCH_SIZE_PER_GPU on 280GB GPUs.
 BUFFER_CAPACITY="${BUFFER_CAPACITY:-512}"
-TRAIN_BATCH_SIZE_PER_GPU="${TRAIN_BATCH_SIZE_PER_GPU:-2}"
-TRAIN_GLOBAL_BATCH="${TRAIN_GLOBAL_BATCH:-64}"
+TRAIN_BATCH_SIZE_PER_GPU="${TRAIN_BATCH_SIZE_PER_GPU:-8}"
+TRAIN_GLOBAL_BATCH="${TRAIN_GLOBAL_BATCH:-32}"
 TRAIN_ACTIVATION_CHECKPOINTING="${TRAIN_ACTIVATION_CHECKPOINTING:-1}"
 PSEUDO_EPOCHS_PER_UPDATE="${PSEUDO_EPOCHS_PER_UPDATE:-3}"
 REAL_FRACTION="${REAL_FRACTION:-0.5}"
@@ -67,6 +67,7 @@ if (( TRAIN_GLOBAL_BATCH % (TRAIN_BATCH_SIZE_PER_GPU * NGPU) != 0 )); then
   echo "TRAIN_GLOBAL_BATCH must divide by TRAIN_BATCH_SIZE_PER_GPU*number_of_GPUs" >&2
   exit 2
 fi
+GRADIENT_ACCUMULATION_STEPS=$((TRAIN_GLOBAL_BATCH / (TRAIN_BATCH_SIZE_PER_GPU * NGPU)))
 if [[ -z "$UPDATE_STEPS" ]]; then
   UPDATE_STEPS="$(awk \
     -v capacity="$BUFFER_CAPACITY" \
@@ -126,7 +127,7 @@ export TOKENIZERS_PARALLELISM=false
 export PYTHONPATH="$PROJECT_ROOT:${PYTHONPATH:-}"
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 
-echo "ONLINE_DUAL_RFT_CONFIG infer_gpus=$INFER_GPU_IDS q_per_round=$Q_PER_ROUND q_per_gpu=$Q_PER_GPU inference_batch_per_gpu=$INFER_BATCH_SIZE_PER_GPU candidates_per_q=$CANDIDATES_PER_Q buffer_capacity=$BUFFER_CAPACITY pseudo_epochs_per_update=$PSEUDO_EPOCHS_PER_UPDATE real_fraction=$REAL_FRACTION train_batch_per_gpu=$TRAIN_BATCH_SIZE_PER_GPU train_global_batch=$TRAIN_GLOBAL_BATCH activation_checkpointing=$TRAIN_ACTIVATION_CHECKPOINTING update_steps=$UPDATE_STEPS max_updates=$MAX_UPDATES model_save_every_updates=$MODEL_SAVE_EVERY_UPDATES action_gate_policy=$ACTION_GATE_POLICY action_workspace_scope=$ACTION_WORKSPACE_SCOPE min_action_score=$MIN_ACTION_SCORE min_process_score=$MIN_PROCESS_SCORE max_pseudo_per_context=$MAX_PSEUDO_PER_CONTEXT swanlab_run_id=$SWANLAB_RUN_ID"
+echo "ONLINE_DUAL_RFT_CONFIG infer_gpus=$INFER_GPU_IDS q_per_round=$Q_PER_ROUND q_per_gpu=$Q_PER_GPU inference_batch_per_gpu=$INFER_BATCH_SIZE_PER_GPU candidates_per_q=$CANDIDATES_PER_Q buffer_capacity=$BUFFER_CAPACITY pseudo_epochs_per_update=$PSEUDO_EPOCHS_PER_UPDATE real_fraction=$REAL_FRACTION train_batch_per_gpu=$TRAIN_BATCH_SIZE_PER_GPU train_global_batch=$TRAIN_GLOBAL_BATCH gradient_accumulation=$GRADIENT_ACCUMULATION_STEPS activation_checkpointing=$TRAIN_ACTIVATION_CHECKPOINTING update_steps=$UPDATE_STEPS max_updates=$MAX_UPDATES model_save_every_updates=$MODEL_SAVE_EVERY_UPDATES action_gate_policy=$ACTION_GATE_POLICY action_workspace_scope=$ACTION_WORKSPACE_SCOPE min_action_score=$MIN_ACTION_SCORE min_process_score=$MIN_PROCESS_SCORE max_pseudo_per_context=$MAX_PSEUDO_PER_CONTEXT swanlab_run_id=$SWANLAB_RUN_ID"
 
 log_collection_swanlab() {
   local collect_index="${1:-}"

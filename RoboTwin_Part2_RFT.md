@@ -102,7 +102,7 @@ The command performs these stages in order:
 3. Build the Stage-2 pseudo-chunk budget.
 4. Compose a complete WAM root when the input checkpoint contains only a
    transformer.
-5. For each collection round, sample 16 contexts and generate 8 one-chunk
+5. For each collection round, sample 128 contexts and generate 8 one-chunk
    candidates per context.
 6. Reject candidates below the Action Critic threshold.
 7. Score the remaining candidate futures with VLAC and reject low process
@@ -110,7 +110,8 @@ The command performs these stages in order:
 8. Append every accepted candidate from the same context to a 512-chunk replay
    buffer.
 9. When the buffer is full, train for 3 epochs using 50% Stage-1 real chunks
-   and 50% pseudo chunks with global batch 64.
+   and 50% pseudo chunks with global batch 32. Four GPUs each process batch 8,
+   so gradient accumulation is 1.
 10. Replace the WAM transformer with the updated checkpoint and repeat.
 
 The rolling model is refreshed after every RFT update so the next collection
@@ -127,12 +128,14 @@ are optimized.
 | Setting | Default |
 |---|---:|
 | GPUs | `0,1,2,3` |
-| contexts per collection | 16 |
+| contexts per collection | 128 |
 | candidates per context | 8 |
 | pseudo-buffer capacity | 512 |
 | real/pseudo sampling | 50% / 50% |
 | pseudo epochs per update | 3 |
-| global training batch | 64 |
+| training batch per GPU | 8 |
+| global training batch | 32 |
+| gradient accumulation | 1 |
 | Action Critic threshold | 0.75 |
 | VLAC process threshold | 5.0 |
 | maximum RFT updates | 1000 |
