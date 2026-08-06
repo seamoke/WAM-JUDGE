@@ -132,7 +132,7 @@ The command performs these stages in order:
 7. Reject candidates below the Action Critic threshold.
 8. Score the remaining candidate futures with VLAC and reject low process
    scores.
-9. Append every accepted candidate from the same context to a 512-chunk replay
+9. Append every accepted candidate from the same context to a 1024-chunk replay
    buffer.
 10. When the buffer is full, train for 3 epochs using 50% selected Stage-1 +
     Stage-2 real chunks and 50% pseudo chunks with global batch 32. Four GPUs
@@ -155,7 +155,7 @@ are optimized.
 | GPUs | `0,1,2,3` |
 | contexts per collection | 128 |
 | candidates per context | 8 |
-| pseudo-buffer capacity | 512 |
+| pseudo-buffer capacity | 1024 |
 | real/pseudo sampling | 50% / 50% |
 | pseudo epochs per update | 3 |
 | training batch per GPU | 8 |
