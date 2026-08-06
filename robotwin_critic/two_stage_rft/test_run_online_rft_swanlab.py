@@ -71,6 +71,7 @@ class OnlineRFTSwanLabDriverTest(unittest.TestCase):
             swanlab = FakeSwanLab()
             metrics = log_startup_status(swanlab, root)
             self.assertEqual(metrics["online/status/update_index"], 3.0)
+            self.assertEqual(metrics["rft/update_round"], 3.0)
             self.assertEqual(metrics["online/status/collect_index"], 5.0)
             self.assertEqual(metrics["online/status/accepted_total"], 70.0)
             self.assertEqual(swanlab.events, [(metrics, None)])

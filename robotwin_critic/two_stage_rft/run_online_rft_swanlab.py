@@ -98,6 +98,7 @@ def log_startup_status(swanlab_module: Any, online_root: Path) -> dict[str, floa
     metrics = {
         "online/status/active": 1.0,
         "online/status/update_index": float(state.get("update_index", 0)),
+        "rft/update_round": float(state.get("update_index", 0)),
         "online/status/collect_index": float(state.get("collect_index", 0)),
         "online/status/accepted_total": float(state.get("accepted_total", 0)),
         "online/status/consumed_total": float(state.get("consumed_total", 0)),
@@ -178,7 +179,8 @@ def main() -> None:
         collection_logger.log_completed()
         metric_state_path = args.online_root / "swanlab_metric_upload_state.json"
         replay_completed_training_metrics(swanlab, args.online_root, metric_state_path)
-        log_startup_status(swanlab, args.online_root)
+        startup_metrics = log_startup_status(swanlab, args.online_root)
+        current_update_round = int(startup_metrics["rft/update_round"])
 
         child_env = os.environ.copy()
         child_env["SWANLAB_PARENT_DRIVER"] = "1"
@@ -202,6 +204,7 @@ def main() -> None:
                     {
                         "online/status/collect_completed": float(collect_index + 1),
                         "online/status/collect_running": 0.0,
+                        "rft/update_round": float(current_update_round),
                     },
                     step=collect_index,
                 )
@@ -214,11 +217,13 @@ def main() -> None:
             update_ok = UPDATE_OK.search(line)
             if update_ok is not None:
                 update_index = int(update_ok.group(1))
+                current_update_round = update_index + 1
                 mark_training_metrics_logged(metric_state_path, update_index)
                 swanlab.log(
                     {
                         "online/status/update_completed": float(update_index + 1),
                         "online/status/training_running": 0.0,
+                        "rft/update_round": float(current_update_round),
                     }
                 )
             collect_start = COLLECT_START.search(line)
@@ -228,6 +233,7 @@ def main() -> None:
                     {
                         "online/status/collect_started": float(collect_index + 1),
                         "online/status/collect_running": 1.0,
+                        "rft/update_round": float(current_update_round),
                     },
                     step=collect_index,
                 )
