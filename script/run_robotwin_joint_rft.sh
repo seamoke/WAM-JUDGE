@@ -64,7 +64,7 @@ export LINGBOT_ENABLE_SWANLAB="${ENABLE_SWANLAB:-1}"
 export LINGBOT_SWANLAB_MODE="${LINGBOT_SWANLAB_MODE:-online}"
 export LINGBOT_SWANLAB_LOG_DIR="$OUT/swanlab"
 export LINGBOT_SWANLAB_EXPERIMENT_NAME="${SWANLAB_EXPERIMENT_NAME:-$RUN_ID}"
-export LINGBOT_SWANLAB_PROJECT="${LINGBOT_SWANLAB_PROJECT:-lingbot-va-robotwin-rft}"
+export LINGBOT_SWANLAB_PROJECT="${LINGBOT_SWANLAB_PROJECT:-lingbot-va-robotwin}"
 if [[ -z "${SWANLAB_API_KEY:-}" && -s "$PROJECT_ROOT/.secrets/swanlab_api_key" ]]; then
   export SWANLAB_API_KEY="$(tr -d '[:space:]' < "$PROJECT_ROOT/.secrets/swanlab_api_key")"
 fi

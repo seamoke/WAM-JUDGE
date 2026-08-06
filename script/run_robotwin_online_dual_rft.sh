@@ -142,7 +142,7 @@ log_collection_swanlab() {
     --online-root "$ONLINE_ROOT" \
     --state "$SWANLAB_COLLECTION_STATE" \
     --run-id "$SWANLAB_COLLECTION_RUN_ID" \
-    --project "${LINGBOT_SWANLAB_PROJECT:-lingbot-va-robotwin-rft}" \
+    --project "${LINGBOT_SWANLAB_PROJECT:-lingbot-va-robotwin}" \
     --group "${LINGBOT_SWANLAB_GROUP:-robotwin-stage1-real-stage2-pseudo}" \
     --name "${SWANLAB_COLLECTION_NAME:-robotwin-stage1-15000-dual-rft-collection}" \
     --log-dir "$SWANLAB_COLLECTION_LOG_DIR" \
@@ -202,7 +202,7 @@ run_ready_update() {
   LINGBOT_SWANLAB_RUN_ID="$SWANLAB_RUN_ID" \
   LINGBOT_SWANLAB_EXTERNAL="$SWANLAB_PARENT_DRIVER" \
   LINGBOT_SWANLAB_GROUP="${LINGBOT_SWANLAB_GROUP:-robotwin-stage1-real-stage2-pseudo}" \
-  LINGBOT_SWANLAB_PROJECT="${LINGBOT_SWANLAB_PROJECT:-lingbot-va-robotwin-rft}" \
+  LINGBOT_SWANLAB_PROJECT="${LINGBOT_SWANLAB_PROJECT:-lingbot-va-robotwin}" \
   SWANLAB_EXPERIMENT_NAME="${SWANLAB_EXPERIMENT_NAME:-robotwin-stage1-15000-dual-rft-1000}" \
   RUN_ID="online_update_$(printf '%06d' "$update_index")" \
   OUT="$train_root" \

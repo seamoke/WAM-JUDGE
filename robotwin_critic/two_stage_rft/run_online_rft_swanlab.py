@@ -121,7 +121,7 @@ def log_startup_status(swanlab_module: Any, online_root: Path) -> dict[str, floa
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--online-root", type=Path, required=True)
-    parser.add_argument("--project", default="lingbot-va-robotwin-rft")
+    parser.add_argument("--project", default="lingbot-va-robotwin")
     parser.add_argument("--group", default="robotwin-stage1-real-stage2-pseudo")
     parser.add_argument("--name", default="robotwin-stage1-15000-dual-rft-1000")
     parser.add_argument("--log-dir", type=Path)
