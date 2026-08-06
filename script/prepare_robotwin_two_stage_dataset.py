@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -56,9 +57,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stage1-per-domain", type=int, default=30)
     parser.add_argument(
         "--link-mode",
-        choices=("hardlink", "symlink"),
+        choices=("hardlink", "symlink", "copy"),
         default="hardlink",
-        help="Hardlinks use no extra payload space but require one filesystem.",
+        help=(
+            "Hardlinks use no extra payload space but require one filesystem; "
+            "copy creates a self-contained dataset suitable for migration."
+        ),
     )
     parser.add_argument(
         "--allow-missing-latent-segments",
@@ -151,8 +155,12 @@ def link_file(src: Path, dst: Path, mode: str) -> None:
         raise FileExistsError(dst)
     if mode == "hardlink":
         os.link(src, dst)
-    else:
+    elif mode == "symlink":
         dst.symlink_to(os.path.relpath(src, dst.parent))
+    elif mode == "copy":
+        shutil.copy2(src, dst)
+    else:
+        raise ValueError(f"Unsupported link mode: {mode}")
 
 
 def materialize_parquet(src: Path, dst: Path, *, redact_action: bool) -> None:

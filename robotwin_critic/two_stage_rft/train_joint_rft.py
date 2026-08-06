@@ -210,8 +210,12 @@ def main() -> None:
     parser.add_argument("--real-fraction", type=float, default=0.7)
     parser.add_argument(
         "--real-data-mode",
-        choices=("stage1", "stage1-stage2"),
-        default="stage1-stage2",
+        choices=("stage1", "stage1-stage2", "stage1-stage2-visible"),
+        default="stage1-stage2-visible",
+        help=(
+            "stage1-stage2 reads and filters the original dataset; "
+            "stage1-stage2-visible reads the preselected action-visible union."
+        ),
     )
     parser.add_argument(
         "--real-chunk-mode",

@@ -17,7 +17,8 @@ WAM_PYTHON="${WAM_PYTHON:-$PROJECT_ROOT/.venv/bin/python}"
 RFT_SELECTION_MODE="${RFT_SELECTION_MODE:-dual}"
 REAL_CHUNK_MODE="${REAL_CHUNK_MODE:-full}"
 REAL_FRACTION="${REAL_FRACTION:-0.5}"
-REAL_DATA_MODE="${REAL_DATA_MODE:-stage1-stage2}"
+REAL_DATA_MODE="${REAL_DATA_MODE:-stage1-stage2-visible}"
+REAL_DATA_ROOT="${REAL_DATA_ROOT:-}"
 OUTER_STEP="${RFT_OUTER_STEP:-0}"
 SWANLAB_STEP_OFFSET="${RFT_SWANLAB_STEP_OFFSET:-0}"
 RUN_ID="${RUN_ID:-robotwin_dual_rft_joint_full_${NUM_STEPS}steps_$(date +%Y%m%d_%H%M%S)}"
@@ -29,11 +30,22 @@ test -s "$STAGE1_CHECKPOINT/transformer/config.json"
 test -s "$PSEUDO_JSONL"
 test -d "$PREPARED_DATA_ROOT/stage1"
 test -s "$PREPARED_DATA_ROOT/stage1/empty_emb.pt"
-if [[ "$REAL_DATA_MODE" == "stage1-stage2" ]]; then
-  REAL_DATA_ROOT="$($WAM_PYTHON -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_root"])' "$PREPARED_DATA_ROOT/split_manifest.json")"
-else
-  REAL_DATA_ROOT="$PREPARED_DATA_ROOT/stage1"
-fi
+case "$REAL_DATA_MODE" in
+  stage1)
+    REAL_DATA_ROOT="${REAL_DATA_ROOT:-$PREPARED_DATA_ROOT/stage1}"
+    ;;
+  stage1-stage2)
+    REAL_DATA_ROOT="${REAL_DATA_ROOT:-$($WAM_PYTHON -c 'import json,sys; print(json.load(open(sys.argv[1]))["source_root"])' "$PREPARED_DATA_ROOT/split_manifest.json")}"
+    ;;
+  stage1-stage2-visible)
+    REAL_DATA_ROOT="${REAL_DATA_ROOT:-$PREPARED_DATA_ROOT/action_visible_real}"
+    test -s "$REAL_DATA_ROOT/ACTION_VISIBLE_COMPLETE.json"
+    ;;
+  *)
+    echo "Unsupported REAL_DATA_MODE: $REAL_DATA_MODE" >&2
+    exit 2
+    ;;
+esac
 test -d "$REAL_DATA_ROOT"
 if [[ -e "$OUT" ]]; then
   echo "Refusing to overwrite existing run: $OUT" >&2
@@ -49,7 +61,11 @@ mkdir -p "$OUT"
 
 export WAN_VA_MODEL_PATH="$STAGE1_CHECKPOINT"
 export ROBOTWIN_DATASET_PATH="$REAL_DATA_ROOT"
-export ROBOTWIN_EMPTY_EMB_PATH="$PREPARED_DATA_ROOT/stage1/empty_emb.pt"
+if [[ -s "$REAL_DATA_ROOT/empty_emb.pt" ]]; then
+  export ROBOTWIN_EMPTY_EMB_PATH="$REAL_DATA_ROOT/empty_emb.pt"
+else
+  export ROBOTWIN_EMPTY_EMB_PATH="$PREPARED_DATA_ROOT/stage1/empty_emb.pt"
+fi
 export LINGBOT_TRAIN_SAVE_ROOT="$OUT"
 export LINGBOT_TRAIN_NUM_STEPS="$NUM_STEPS"
 export LINGBOT_TRAIN_BATCH_SIZE="$TRAIN_BATCH_SIZE_PER_GPU"

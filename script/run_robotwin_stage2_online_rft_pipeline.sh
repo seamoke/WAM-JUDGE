@@ -13,6 +13,10 @@ if [[ -s "$LOCAL_CONFIG" ]]; then
 fi
 
 STAGE2_DATA_ROOT="${STAGE2_DATA_ROOT:-}"
+ORIGINAL_ROBOTWIN_ROOT="${ORIGINAL_ROBOTWIN_ROOT:-}"
+REAL_DATA_ROOT="${REAL_DATA_ROOT:-}"
+REAL_DATA_LINK_MODE="${REAL_DATA_LINK_MODE:-hardlink}"
+REAL_DATA_MODE="${REAL_DATA_MODE:-stage1-stage2-visible}"
 WAM_MODEL="${WAM_MODEL:-}"
 VLAC_MODEL="${VLAC_MODEL:-}"
 BASE_MODEL="${BASE_MODEL:-$LINGBOT_ROOT/models/lingbot-va-base}"
@@ -57,12 +61,19 @@ Usage:
 Required:
   --stage2-data-root  Prepared split root or its stage2/ directory. Its sibling
                       stage1/ must contain the action-labeled calibration data.
+  --original-robotwin-root PATH
+                      Original RoboTwin root used to restore the selected
+                      Stage-2 action labels. Optional if manifest path exists.
   --wam-model         Complete WAM root, transformer checkpoint root, or the
                       transformer/ directory itself.
   --vlac-model        Trained VLAC checkpoint containing config.json.
 
 Common options:
   --base-model PATH   Complete WAM skeleton used with transformer-only checkpoints.
+  --real-data-root PATH
+                      Existing selected action-visible replay root. If absent,
+                      it is built at PREPARED_ROOT/action_visible_real.
+  --real-data-link-mode hardlink|copy|symlink (use copy before migration).
   --output-root PATH  Run directory. Defaults to a timestamped train_out path.
   --gpu-ids IDS       Comma-separated GPU IDs (default: 0,1,2,3).
   --fresh             Delete OUTPUT_ROOT before starting. Never implied.
@@ -89,6 +100,9 @@ require_value() {
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --stage2-data-root) require_value "$@"; STAGE2_DATA_ROOT="$2"; shift 2 ;;
+    --original-robotwin-root) require_value "$@"; ORIGINAL_ROBOTWIN_ROOT="$2"; shift 2 ;;
+    --real-data-root) require_value "$@"; REAL_DATA_ROOT="$2"; shift 2 ;;
+    --real-data-link-mode) require_value "$@"; REAL_DATA_LINK_MODE="$2"; shift 2 ;;
     --wam-model) require_value "$@"; WAM_MODEL="$2"; shift 2 ;;
     --vlac-model) require_value "$@"; VLAC_MODEL="$2"; shift 2 ;;
     --base-model) require_value "$@"; BASE_MODEL="$2"; shift 2 ;;
@@ -154,13 +168,18 @@ test -s "$PREPARED_DATA_ROOT/split_manifest.json"
 test -s "$PREPARED_DATA_ROOT/PREPARATION_COMPLETE.json"
 test -s "$VLAC_MODEL/config.json"
 
+if [[ -z "$REAL_DATA_ROOT" ]]; then
+  REAL_DATA_ROOT="$PREPARED_DATA_ROOT/action_visible_real"
+fi
+REAL_DATA_ROOT="$(realpath -m "$REAL_DATA_ROOT")"
+
 if [[ -z "$OUTPUT_ROOT" ]]; then
   OUTPUT_ROOT="$LINGBOT_ROOT/train_out/critic/robotwin/stage2_online_rft_$(date +%Y%m%d_%H%M%S)"
 fi
 OUTPUT_ROOT="$(realpath -m "$OUTPUT_ROOT")"
 if [[ "$FRESH" == "1" && -e "$OUTPUT_ROOT" ]]; then
   case "$OUTPUT_ROOT" in
-    /|"$PROJECT_ROOT"|"$LINGBOT_ROOT"|"$PREPARED_DATA_ROOT"|"$STAGE2_DATA_ROOT"|"$WAM_MODEL"|"$VLAC_MODEL")
+    /|"$PROJECT_ROOT"|"$LINGBOT_ROOT"|"$PREPARED_DATA_ROOT"|"$STAGE2_DATA_ROOT"|"$REAL_DATA_ROOT"|"$WAM_MODEL"|"$VLAC_MODEL")
       echo "Refusing to delete protected path: $OUTPUT_ROOT" >&2
       exit 2
       ;;
@@ -177,7 +196,26 @@ echo "prepared_data_root=$PREPARED_DATA_ROOT"
 echo "stage2_data_root=$STAGE2_DATA_ROOT"
 echo "wam_model=$WAM_MODEL"
 echo "vlac_model=$VLAC_MODEL"
+echo "real_data_root=$REAL_DATA_ROOT"
 echo "output_root=$OUTPUT_ROOT"
+
+if [[ "$REAL_DATA_MODE" == "stage1-stage2-visible" ]]; then
+  if [[ ! -s "$REAL_DATA_ROOT/ACTION_VISIBLE_COMPLETE.json" ]]; then
+    source_args=()
+    if [[ -n "$ORIGINAL_ROBOTWIN_ROOT" ]]; then
+      source_args+=(--source-root "$ORIGINAL_ROBOTWIN_ROOT")
+    fi
+    "$PYTHON" -m robotwin_critic.two_stage_rft.prepare_action_visible_real \
+      --prepared-root "$PREPARED_DATA_ROOT" \
+      --output-root "$REAL_DATA_ROOT" \
+      --link-mode "$REAL_DATA_LINK_MODE" \
+      "${source_args[@]}"
+  fi
+  "$PYTHON" -m robotwin_critic.two_stage_rft.prepare_action_visible_real \
+    --prepared-root "$PREPARED_DATA_ROOT" \
+    --output-root "$REAL_DATA_ROOT" \
+    --verify-only
+fi
 
 ACTION_PROFILE="$PART2_ROOT/stage1_kinematic_profile.json"
 CONTEXTS="$PART2_ROOT/stage2_video_contexts.jsonl"
@@ -250,6 +288,7 @@ if [[ -z "${SWANLAB_API_KEY:-}" ]]; then
 fi
 
 export PROJECT_ROOT LINGBOT_ROOT PREPARED_DATA_ROOT PART2_ROOT ONLINE_ROOT
+export REAL_DATA_ROOT REAL_DATA_MODE
 export INITIAL_MODEL VLAC_MODEL
 export CONTEXTS ACTION_PROFILE
 export INFER_GPU_IDS="$GPU_IDS"

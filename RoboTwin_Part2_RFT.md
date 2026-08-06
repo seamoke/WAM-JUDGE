@@ -12,13 +12,17 @@ script/run_robotwin_stage2_online_rft_pipeline.sh
 
 ## Inputs
 
-The command requires three paths:
+The command requires these paths:
 
 1. `--stage2-data-root`: either the prepared split root or its `stage2/`
    directory.
 2. `--wam-model`: a complete WAM root or a transformer-only checkpoint such as
    `checkpoint_step_15000`.
 3. `--vlac-model`: the trained VLAC checkpoint used as Process Critic.
+4. `--original-robotwin-root`: the original action-visible RoboTwin dataset.
+   It is needed once to restore only the manifest-selected Stage-2 actions. It
+   may be omitted when `split_manifest.json` still records a valid source path,
+   or when `action_visible_real/` has already been built.
 
 The prepared data must have this layout:
 
@@ -27,12 +31,29 @@ prepared_dataset/
 ├── split_manifest.json
 ├── PREPARATION_COMPLETE.json
 ├── stage1/                  # action-labeled trajectories
-└── stage2/                  # action-free trajectories
+├── stage2/                  # action-free trajectories
+└── action_visible_real/     # generated selected 30+20 real replay view
 ```
 
 Although the CLI accepts the `stage2/` path, `stage1/` must be its sibling.
 The Action Critic is calibrated only from Stage-1 actions. Stage-2 actions are
-not read.
+not read while building contexts, calibrating critics, or selecting pseudo
+chunks. They are restored only for the 50% real replay stream during WAM
+fine-tuning.
+
+To build that replay view before starting RFT:
+
+```bash
+bash script/prepare_robotwin_action_visible_real.sh \
+  --prepared-root /path/to/prepared_dataset \
+  --source-root /path/to/original_robotwin \
+  --output-root /path/to/prepared_dataset/action_visible_real \
+  --link-mode hardlink
+```
+
+Use `--link-mode copy` when the resulting directory will itself be transferred
+to another machine. The main pipeline runs this step automatically when the
+completion marker is absent.
 
 The Kinematic Action Critic is a calibrated profile rather than a neural
 network checkpoint. It stores task-aware velocity, acceleration, jerk,
@@ -62,6 +83,8 @@ cd /inspire/hdd/project/sais-auto-scientist/public/Lingbot-va/code
 bash script/run_robotwin_stage2_online_rft_pipeline.sh \
   --stage2-data-root \
     /inspire/hdd/project/sais-auto-scientist/public/Lingbot-va/datasets/robotwin-clean-aug-two-stage-redacted-seed42/stage2 \
+  --original-robotwin-root \
+    /inspire/hdd/project/sais-auto-scientist/public/Lingbot-va/datasets/robotwin-clean-and-aug-lerobot \
   --wam-model \
     /inspire/hdd/project/sais-auto-scientist/public/Lingbot-va/models/lingbot-va-stage1-checkpoints/checkpoint_step_15000 \
   --vlac-model \
@@ -97,22 +120,24 @@ The SwanLab API key is read from `SWANLAB_API_KEY` or
 
 The command performs these stages in order:
 
-1. Calibrate the Action Critic from Stage-1 action-labeled trajectories.
-2. Build Stage-2 video contexts without reading Stage-2 action labels.
-3. Build the Stage-2 pseudo-chunk budget.
-4. Compose a complete WAM root when the input checkpoint contains only a
+1. Reconstruct the exact manifest-selected 30+20 action-visible real replay
+   view from the original dataset, then verify every parquet action column.
+2. Calibrate the Action Critic from Stage-1 action-labeled trajectories only.
+3. Build Stage-2 video contexts without reading Stage-2 action labels.
+4. Build the Stage-2 pseudo-chunk budget.
+5. Compose a complete WAM root when the input checkpoint contains only a
    transformer.
-5. For each collection round, sample 128 contexts and generate 8 one-chunk
+6. For each collection round, sample 128 contexts and generate 8 one-chunk
    candidates per context.
-6. Reject candidates below the Action Critic threshold.
-7. Score the remaining candidate futures with VLAC and reject low process
+7. Reject candidates below the Action Critic threshold.
+8. Score the remaining candidate futures with VLAC and reject low process
    scores.
-8. Append every accepted candidate from the same context to a 512-chunk replay
+9. Append every accepted candidate from the same context to a 512-chunk replay
    buffer.
-9. When the buffer is full, train for 3 epochs using 50% Stage-1 real chunks
-   and 50% pseudo chunks with global batch 32. Four GPUs each process batch 8,
-   so gradient accumulation is 1.
-10. Replace the WAM transformer with the updated checkpoint and repeat.
+10. When the buffer is full, train for 3 epochs using 50% selected Stage-1 +
+    Stage-2 real chunks and 50% pseudo chunks with global batch 32. Four GPUs
+    each process batch 8, so gradient accumulation is 1.
+11. Replace the WAM transformer with the updated checkpoint and repeat.
 
 The rolling model is refreshed after every RFT update so the next collection
 uses the latest parameters. Historical model checkpoints are retained only

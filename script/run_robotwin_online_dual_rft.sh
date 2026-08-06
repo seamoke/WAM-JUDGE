@@ -6,6 +6,8 @@ LINGBOT_ROOT="${LINGBOT_ROOT:-$(dirname "$PROJECT_ROOT")}"
 PART2_ROOT="${PART2_ROOT:-$LINGBOT_ROOT/train_out/critic/robotwin/part2_rft}"
 ONLINE_ROOT="${ONLINE_ROOT:-$PART2_ROOT/online_dual_rft}"
 PREPARED_DATA_ROOT="${PREPARED_DATA_ROOT:-$LINGBOT_ROOT/datasets/robotwin-clean-aug-two-stage-seed42}"
+REAL_DATA_ROOT="${REAL_DATA_ROOT:-$PREPARED_DATA_ROOT/action_visible_real}"
+REAL_DATA_MODE="${REAL_DATA_MODE:-stage1-stage2-visible}"
 INITIAL_MODEL="${INITIAL_MODEL:?Set INITIAL_MODEL to a complete WAM checkpoint root}"
 VLAC_MODEL="${VLAC_MODEL:?Set VLAC_MODEL to the trained VLAC checkpoint}"
 VLAC_ADAPTER="${VLAC_ADAPTER:-}"
@@ -183,6 +185,7 @@ run_ready_update() {
   PROJECT_ROOT="$PROJECT_ROOT" \
   LINGBOT_ROOT="$LINGBOT_ROOT" \
   PREPARED_DATA_ROOT="$PREPARED_DATA_ROOT" \
+  REAL_DATA_ROOT="$REAL_DATA_ROOT" \
   PART2_ROOT="$PART2_ROOT" \
   STAGE1_CHECKPOINT="$current_model" \
   PSEUDO_JSONL="$ready" \
@@ -194,7 +197,7 @@ run_ready_update() {
   RFT_OUTER_STEP="$update_index" \
   RFT_SWANLAB_STEP_OFFSET="$((update_index * UPDATE_STEPS))" \
   REAL_FRACTION="$REAL_FRACTION" \
-  REAL_DATA_MODE=stage1-stage2 \
+  REAL_DATA_MODE="$REAL_DATA_MODE" \
   REAL_CHUNK_MODE=first-transition \
   ACTIVATION_CHECKPOINTING="$TRAIN_ACTIVATION_CHECKPOINTING" \
   WARMUP_STEPS=1 \
