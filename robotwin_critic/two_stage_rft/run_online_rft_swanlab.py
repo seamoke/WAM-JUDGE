@@ -20,6 +20,7 @@ COLLECTION_EVENT = "SWANLAB_COLLECTION_EVENT "
 METRIC_EVENT = "SWANLAB_METRIC_EVENT "
 TORCHRUN_PREFIX = re.compile(r"^\[[^\]]+\]:")
 UPDATE_OK = re.compile(r"ONLINE_UPDATE_OK index=(\d+)")
+COLLECT_START = re.compile(r"ONLINE_COLLECT_START index=(\d+)")
 
 
 def parse_metric_event(line: str) -> tuple[dict, int | None] | None:
@@ -87,6 +88,35 @@ def replay_completed_training_metrics(
     return replayed
 
 
+def log_startup_status(swanlab_module: Any, online_root: Path) -> dict[str, float]:
+    state_path = online_root / "state.json"
+    state = (
+        json.loads(state_path.read_text(encoding="utf-8"))
+        if state_path.is_file()
+        else {}
+    )
+    metrics = {
+        "online/status/active": 1.0,
+        "online/status/update_index": float(state.get("update_index", 0)),
+        "online/status/collect_index": float(state.get("collect_index", 0)),
+        "online/status/accepted_total": float(state.get("accepted_total", 0)),
+        "online/status/consumed_total": float(state.get("consumed_total", 0)),
+    }
+    for environment_name, metric_name in (
+        ("BUFFER_CAPACITY", "online/config/buffer_capacity"),
+        ("Q_PER_ROUND", "online/config/q_per_round"),
+        ("CANDIDATES_PER_Q", "online/config/candidates_per_q"),
+        ("TRAIN_GLOBAL_BATCH", "online/config/train_global_batch"),
+        ("PSEUDO_EPOCHS_PER_UPDATE", "online/config/pseudo_epochs_per_update"),
+        ("REAL_FRACTION", "online/config/real_fraction"),
+    ):
+        value = os.getenv(environment_name)
+        if value is not None:
+            metrics[metric_name] = float(value)
+    swanlab_module.log(metrics)
+    return metrics
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--online-root", type=Path, required=True)
@@ -148,6 +178,7 @@ def main() -> None:
         collection_logger.log_completed()
         metric_state_path = args.online_root / "swanlab_metric_upload_state.json"
         replay_completed_training_metrics(swanlab, args.online_root, metric_state_path)
+        log_startup_status(swanlab, args.online_root)
 
         child_env = os.environ.copy()
         child_env["SWANLAB_PARENT_DRIVER"] = "1"
@@ -167,6 +198,13 @@ def main() -> None:
                 payload = json.loads(line[len(COLLECTION_EVENT) :])
                 collect_index = int(payload["collect_index"])
                 collection_logger.log_completed(through=collect_index)
+                swanlab.log(
+                    {
+                        "online/status/collect_completed": float(collect_index + 1),
+                        "online/status/collect_running": 0.0,
+                    },
+                    step=collect_index,
+                )
                 continue
             metric_event = parse_metric_event(line)
             if metric_event is not None:
@@ -175,7 +213,24 @@ def main() -> None:
                 continue
             update_ok = UPDATE_OK.search(line)
             if update_ok is not None:
-                mark_training_metrics_logged(metric_state_path, int(update_ok.group(1)))
+                update_index = int(update_ok.group(1))
+                mark_training_metrics_logged(metric_state_path, update_index)
+                swanlab.log(
+                    {
+                        "online/status/update_completed": float(update_index + 1),
+                        "online/status/training_running": 0.0,
+                    }
+                )
+            collect_start = COLLECT_START.search(line)
+            if collect_start is not None:
+                collect_index = int(collect_start.group(1))
+                swanlab.log(
+                    {
+                        "online/status/collect_started": float(collect_index + 1),
+                        "online/status/collect_running": 1.0,
+                    },
+                    step=collect_index,
+                )
             sys.stdout.write(line)
             sys.stdout.flush()
         return_code = process.wait()

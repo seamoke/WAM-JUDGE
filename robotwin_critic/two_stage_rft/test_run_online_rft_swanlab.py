@@ -5,6 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from robotwin_critic.two_stage_rft.run_online_rft_swanlab import (
+    log_startup_status,
     parse_metric_event,
     replay_completed_training_metrics,
 )
@@ -52,6 +53,27 @@ class OnlineRFTSwanLabDriverTest(unittest.TestCase):
             self.assertEqual(
                 replay_completed_training_metrics(swanlab, root, state_path), []
             )
+
+    def test_log_startup_status(self) -> None:
+        class FakeSwanLab:
+            def __init__(self) -> None:
+                self.events = []
+
+            def log(self, metrics, step=None) -> None:
+                self.events.append((metrics, step))
+
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "state.json").write_text(
+                '{"update_index": 3, "collect_index": 5, "accepted_total": 70, "consumed_total": 64}',
+                encoding="utf-8",
+            )
+            swanlab = FakeSwanLab()
+            metrics = log_startup_status(swanlab, root)
+            self.assertEqual(metrics["online/status/update_index"], 3.0)
+            self.assertEqual(metrics["online/status/collect_index"], 5.0)
+            self.assertEqual(metrics["online/status/accepted_total"], 70.0)
+            self.assertEqual(swanlab.events, [(metrics, None)])
 
 
 if __name__ == "__main__":
