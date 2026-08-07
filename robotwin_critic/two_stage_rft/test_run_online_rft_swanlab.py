@@ -30,7 +30,7 @@ class OnlineRFTSwanLabDriverTest(unittest.TestCase):
             "INFER_GPU_IDS": "0,1,2,3,4,5,6,7",
             "Q_PER_ROUND": "320",
             "BUFFER_CAPACITY": "1024",
-            "TRAIN_BATCH_SIZE_PER_GPU": "8",
+            "TRAIN_BATCH_SIZE_PER_GPU": "32",
             "TRAIN_GLOBAL_BATCH": "256",
             "PSEUDO_EPOCHS_PER_UPDATE": "3",
             "REAL_FRACTION": "0.7",
@@ -39,7 +39,7 @@ class OnlineRFTSwanLabDriverTest(unittest.TestCase):
             config = build_runtime_config(Path("/tmp/online"), "run-1")
         self.assertEqual(config["sampling.num_gpus"], 8)
         self.assertEqual(config["sampling.q_per_gpu"], 40)
-        self.assertEqual(config["training.gradient_accumulation_steps"], 4)
+        self.assertEqual(config["training.gradient_accumulation_steps"], 1)
         self.assertEqual(config["training.effective_update_steps"], 40)
         self.assertEqual(config["replay.buffer_capacity"], 1024)
 
