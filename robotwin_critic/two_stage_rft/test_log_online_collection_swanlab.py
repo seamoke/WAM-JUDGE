@@ -5,9 +5,15 @@ import json
 import tempfile
 from pathlib import Path
 
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
+
 from robotwin_critic.two_stage_rft.log_online_collection_swanlab import (
     OnlineCollectionLogger,
     build_collect_metrics,
+    generated_visual_metrics,
     numeric_metrics,
 )
 
@@ -65,8 +71,29 @@ class CollectionSwanLabMetricsTest(unittest.TestCase):
         self.assertEqual(metrics["collect/generated_qa_pairs"], 2.0)
         self.assertEqual(metrics["collect/retained_qa_pairs"], 1.0)
         self.assertEqual(metrics["critic/process_score/mean"], 0.0)
+        self.assertEqual(metrics["critic/retained_process_score/mean"], 10.0)
+        self.assertEqual(metrics["collect/retained_qa_per_retained_q"], 1.0)
         self.assertEqual(metrics["task/pick/qa_retention_rate"], 0.5)
         self.assertEqual(metrics["action_violation/hard.left.jerk"], 1.0)
+
+    @unittest.skipIf(
+        Image is None, "Pillow is not installed in the test interpreter"
+    )
+    def test_generated_visual_metrics_detects_black_frame(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            black = root / "black.png"
+            white = root / "white.png"
+            Image.new("RGB", (32, 32), "black").save(black)
+            Image.new("RGB", (32, 32), "white").save(white)
+            metrics = generated_visual_metrics(
+                [{"generated_image": str(black)}, {"generated_image": str(white)}]
+            )
+            self.assertEqual(metrics["visual/generated_images_checked"], 2.0)
+            self.assertEqual(metrics["visual/generated_near_black_rate"], 0.5)
+            self.assertAlmostEqual(
+                metrics["visual/generated_black_fraction/mean"], 0.5
+            )
 
     def test_continuous_logger_uses_existing_run_without_finishing(self) -> None:
         class FakeSwanLab:

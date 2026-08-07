@@ -52,6 +52,71 @@ def numeric_metrics(prefix: str, values: list[float]) -> dict[str, float]:
     }
 
 
+def generated_visual_metrics(
+    rows: list[dict], max_images: int = 256
+) -> dict[str, float]:
+    """Measure cheap collapse indicators on decoded WAM frames."""
+    try:
+        from PIL import Image, ImageFilter, ImageStat
+    except ImportError:
+        return {"visual/metrics_available": 0.0}
+
+    luminance: list[float] = []
+    contrast: list[float] = []
+    black_fraction: list[float] = []
+    edge_energy: list[float] = []
+    failures = 0
+    if max_images > 0 and len(rows) > max_images:
+        stride = len(rows) / max_images
+        sampled = [
+            rows[min(int(index * stride), len(rows) - 1)]
+            for index in range(max_images)
+        ]
+    else:
+        sampled = rows
+    for row in sampled:
+        image_path = Path(row.get("generated_image", ""))
+        if not image_path.is_file():
+            failures += 1
+            continue
+        try:
+            with Image.open(image_path) as source:
+                image = source.convert("L")
+                image.thumbnail((128, 128))
+                stats = ImageStat.Stat(image)
+                histogram = image.histogram()
+                pixels = max(1, image.width * image.height)
+                luminance.append(float(stats.mean[0]))
+                contrast.append(float(stats.stddev[0]))
+                black_fraction.append(sum(histogram[:16]) / pixels)
+                edge = image.filter(ImageFilter.FIND_EDGES)
+                edge_energy.append(float(ImageStat.Stat(edge).mean[0]))
+        except (OSError, ValueError):
+            failures += 1
+
+    metrics: dict[str, float] = {
+        "visual/metrics_available": 1.0,
+        "visual/generated_images_checked": float(len(luminance)),
+        "visual/generated_image_read_failures": float(failures),
+    }
+    metrics.update(numeric_metrics("visual/generated_luminance", luminance))
+    metrics.update(numeric_metrics("visual/generated_contrast", contrast))
+    metrics.update(
+        numeric_metrics("visual/generated_black_fraction", black_fraction)
+    )
+    metrics.update(numeric_metrics("visual/generated_edge_energy", edge_energy))
+    metrics["visual/generated_near_black_rate"] = (
+        sum(
+            mean < 20.0 or fraction > 0.80
+            for mean, fraction in zip(luminance, black_fraction)
+        )
+        / len(luminance)
+        if luminance
+        else 0.0
+    )
+    return metrics
+
+
 def build_collect_metrics(
     generated: list[dict],
     retained: list[dict],
@@ -75,6 +140,9 @@ def build_collect_metrics(
             else 0.0,
             "collect/qa_retention_rate": len(retained) / len(generated)
             if generated
+            else 0.0,
+            "collect/retained_qa_per_retained_q": len(retained) / retained_q
+            if retained_q
             else 0.0,
             "collect/tasks_generated": float(len(per_task)),
             "collect/tasks_retained": float(
@@ -101,6 +169,21 @@ def build_collect_metrics(
     ]
     metrics.update(numeric_metrics("critic/process_score", process_scores))
     metrics.update(numeric_metrics("critic/action_score", action_scores))
+    metrics.update(
+        numeric_metrics(
+            "critic/retained_process_score",
+            [float(row["process_score"]) for row in retained],
+        )
+    )
+    metrics.update(
+        numeric_metrics(
+            "critic/retained_action_score",
+            [
+                float(row.get("action_critic", {}).get("action_score", 0.0))
+                for row in retained
+            ],
+        )
+    )
     metrics["critic/process_positive_rate"] = (
         sum(value > 5.0 for value in process_scores) / len(process_scores)
         if process_scores
@@ -306,6 +389,7 @@ class OnlineCollectionLogger:
                 self.cumulative_generated,
                 self.cumulative_retained,
             )
+            metrics.update(generated_visual_metrics(generated))
             examples = []
             image_root = (
                 self.online_root / "swanlab_collection_images" / collect_dir.name

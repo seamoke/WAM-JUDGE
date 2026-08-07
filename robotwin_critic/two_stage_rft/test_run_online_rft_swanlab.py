@@ -3,8 +3,11 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
 from robotwin_critic.two_stage_rft.run_online_rft_swanlab import (
+    acquire_parent_lock,
+    build_runtime_config,
     log_startup_status,
     parse_metric_event,
     replay_completed_training_metrics,
@@ -12,6 +15,34 @@ from robotwin_critic.two_stage_rft.run_online_rft_swanlab import (
 
 
 class OnlineRFTSwanLabDriverTest(unittest.TestCase):
+    def test_parent_lock_rejects_concurrent_driver(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            first = acquire_parent_lock(root)
+            try:
+                with self.assertRaises(RuntimeError):
+                    acquire_parent_lock(root)
+            finally:
+                first.close()
+
+    def test_runtime_config_contains_derived_training_shape(self) -> None:
+        environment = {
+            "INFER_GPU_IDS": "0,1,2,3",
+            "Q_PER_ROUND": "128",
+            "BUFFER_CAPACITY": "1024",
+            "TRAIN_BATCH_SIZE_PER_GPU": "8",
+            "TRAIN_GLOBAL_BATCH": "32",
+            "PSEUDO_EPOCHS_PER_UPDATE": "3",
+            "REAL_FRACTION": "0.5",
+        }
+        with mock.patch.dict("os.environ", environment, clear=True):
+            config = build_runtime_config(Path("/tmp/online"), "run-1")
+        self.assertEqual(config["sampling.num_gpus"], 4)
+        self.assertEqual(config["sampling.q_per_gpu"], 32)
+        self.assertEqual(config["training.gradient_accumulation_steps"], 1)
+        self.assertEqual(config["training.effective_update_steps"], 192)
+        self.assertEqual(config["replay.buffer_capacity"], 1024)
+
     def test_parse_training_metric_event(self) -> None:
         parsed = parse_metric_event(
             'SWANLAB_METRIC_EVENT {"step": 12, "metrics": {"loss": 1.5}}\n'
@@ -69,11 +100,16 @@ class OnlineRFTSwanLabDriverTest(unittest.TestCase):
                 encoding="utf-8",
             )
             swanlab = FakeSwanLab()
-            metrics = log_startup_status(swanlab, root)
+            metrics = log_startup_status(
+                swanlab, root, {"replay.buffer_capacity": 1024}
+            )
             self.assertEqual(metrics["online/status/update_index"], 3.0)
             self.assertEqual(metrics["rft/update_round"], 3.0)
             self.assertEqual(metrics["online/status/collect_index"], 5.0)
             self.assertEqual(metrics["online/status/accepted_total"], 70.0)
+            self.assertEqual(
+                metrics["online/config/replay.buffer_capacity"], 1024.0
+            )
             self.assertEqual(swanlab.events, [(metrics, None)])
 
 

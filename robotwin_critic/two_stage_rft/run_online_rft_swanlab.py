@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
+import math
 import os
 import re
 import subprocess
@@ -20,7 +22,179 @@ COLLECTION_EVENT = "SWANLAB_COLLECTION_EVENT "
 METRIC_EVENT = "SWANLAB_METRIC_EVENT "
 TORCHRUN_PREFIX = re.compile(r"^\[[^\]]+\]:")
 UPDATE_OK = re.compile(r"ONLINE_UPDATE_OK index=(\d+)")
+UPDATE_START = re.compile(r"ONLINE_UPDATE_START index=(\d+)")
 COLLECT_START = re.compile(r"ONLINE_COLLECT_START index=(\d+)")
+
+
+RUNTIME_CONFIG_ENV = {
+    "paths.project_root": "PROJECT_ROOT",
+    "paths.lingbot_root": "LINGBOT_ROOT",
+    "paths.prepared_data_root": "PREPARED_DATA_ROOT",
+    "paths.real_data_root": "REAL_DATA_ROOT",
+    "paths.part2_root": "PART2_ROOT",
+    "paths.online_root": "ONLINE_ROOT",
+    "paths.initial_model": "INITIAL_MODEL",
+    "paths.wam_model": "WAM_MODEL",
+    "paths.base_model": "BASE_MODEL",
+    "paths.vlac_model": "VLAC_MODEL",
+    "paths.vlac_adapter": "VLAC_ADAPTER",
+    "paths.contexts": "CONTEXTS",
+    "paths.action_profile": "ACTION_PROFILE",
+    "paths.split_manifest": "SPLIT_MANIFEST",
+    "data.real_data_mode": "REAL_DATA_MODE",
+    "data.expected_per_domain_total": "EXPECTED_PER_DOMAIN_TOTAL",
+    "data.expected_stage1_per_domain": "EXPECTED_STAGE1_PER_DOMAIN",
+    "data.history_frames": "HISTORY_FRAMES",
+    "data.context_pool_multiplier": "CONTEXT_POOL_MULTIPLIER",
+    "data.max_episode_frames": "MAX_EPISODE_FRAMES",
+    "sampling.gpu_ids": "INFER_GPU_IDS",
+    "sampling.q_per_round": "Q_PER_ROUND",
+    "sampling.batch_size_per_gpu": "INFER_BATCH_SIZE_PER_GPU",
+    "sampling.candidates_per_q": "CANDIDATES_PER_Q",
+    "sampling.base_seed": "BASE_SEED",
+    "critic.vlac_batch_size_per_gpu": "VLAC_BATCH_SIZE_PER_GPU",
+    "critic.min_action_score": "MIN_ACTION_SCORE",
+    "critic.min_process_score": "MIN_PROCESS_SCORE",
+    "critic.max_pseudo_per_context": "MAX_PSEUDO_PER_CONTEXT",
+    "critic.action_gate_policy": "ACTION_GATE_POLICY",
+    "critic.action_workspace_scope": "ACTION_WORKSPACE_SCOPE",
+    "replay.buffer_capacity": "BUFFER_CAPACITY",
+    "replay.real_fraction": "REAL_FRACTION",
+    "training.batch_size_per_gpu": "TRAIN_BATCH_SIZE_PER_GPU",
+    "training.global_batch_size": "TRAIN_GLOBAL_BATCH",
+    "training.activation_checkpointing": "TRAIN_ACTIVATION_CHECKPOINTING",
+    "training.pseudo_epochs_per_update": "PSEUDO_EPOCHS_PER_UPDATE",
+    "training.update_steps_override": "UPDATE_STEPS",
+    "training.max_updates": "MAX_UPDATES",
+    "training.model_save_every_updates": "MODEL_SAVE_EVERY_UPDATES",
+}
+
+INTEGER_ENV = {
+    "Q_PER_ROUND",
+    "INFER_BATCH_SIZE_PER_GPU",
+    "CANDIDATES_PER_Q",
+    "BASE_SEED",
+    "VLAC_BATCH_SIZE_PER_GPU",
+    "MAX_PSEUDO_PER_CONTEXT",
+    "BUFFER_CAPACITY",
+    "TRAIN_BATCH_SIZE_PER_GPU",
+    "TRAIN_GLOBAL_BATCH",
+    "TRAIN_ACTIVATION_CHECKPOINTING",
+    "PSEUDO_EPOCHS_PER_UPDATE",
+    "UPDATE_STEPS",
+    "MAX_UPDATES",
+    "MODEL_SAVE_EVERY_UPDATES",
+    "EXPECTED_PER_DOMAIN_TOTAL",
+    "EXPECTED_STAGE1_PER_DOMAIN",
+    "HISTORY_FRAMES",
+    "MAX_EPISODE_FRAMES",
+}
+
+FLOAT_ENV = {
+    "MIN_ACTION_SCORE",
+    "MIN_PROCESS_SCORE",
+    "REAL_FRACTION",
+    "CONTEXT_POOL_MULTIPLIER",
+}
+
+
+def _environment_value(name: str) -> str | int | float | None:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return None
+    if name in INTEGER_ENV:
+        return int(value)
+    if name in FLOAT_ENV:
+        return float(value)
+    return value
+
+
+def build_runtime_config(online_root: Path, run_id: str) -> dict[str, Any]:
+    """Capture every online-RFT setting once on the parent SwanLab run."""
+    config: dict[str, Any] = {
+        "stream": "online_dual_rft",
+        "schema_version": 3,
+        "swanlab_owner": "main_orchestrator",
+        "run_lifecycle": "one_online_root_one_swanlab_run",
+        "run_id": run_id,
+        "paths.online_root": str(online_root.resolve()),
+    }
+    for config_name, environment_name in RUNTIME_CONFIG_ENV.items():
+        value = _environment_value(environment_name)
+        if value is not None:
+            config[config_name] = value
+
+    gpu_ids = [
+        value.strip()
+        for value in str(config.get("sampling.gpu_ids", "")).split(",")
+        if value.strip()
+    ]
+    if gpu_ids:
+        config["sampling.num_gpus"] = len(gpu_ids)
+    q_per_round = config.get("sampling.q_per_round")
+    if gpu_ids and isinstance(q_per_round, int) and q_per_round % len(gpu_ids) == 0:
+        config["sampling.q_per_gpu"] = q_per_round // len(gpu_ids)
+
+    per_gpu = config.get("training.batch_size_per_gpu")
+    global_batch = config.get("training.global_batch_size")
+    if (
+        gpu_ids
+        and isinstance(per_gpu, int)
+        and isinstance(global_batch, int)
+        and per_gpu > 0
+        and global_batch % (per_gpu * len(gpu_ids)) == 0
+    ):
+        config["training.gradient_accumulation_steps"] = global_batch // (
+            per_gpu * len(gpu_ids)
+        )
+
+    capacity = config.get("replay.buffer_capacity")
+    epochs = config.get("training.pseudo_epochs_per_update")
+    real_fraction = config.get("replay.real_fraction")
+    if (
+        not config.get("training.update_steps_override")
+        and isinstance(capacity, int)
+        and isinstance(epochs, int)
+        and isinstance(global_batch, int)
+        and isinstance(real_fraction, float)
+        and 0.0 < real_fraction < 1.0
+    ):
+        config["training.effective_update_steps"] = math.ceil(
+            capacity * epochs / (global_batch * (1.0 - real_fraction))
+        )
+    elif config.get("training.update_steps_override"):
+        config["training.effective_update_steps"] = config[
+            "training.update_steps_override"
+        ]
+    return config
+
+
+def runtime_config_metrics(config: dict[str, Any]) -> dict[str, float]:
+    metrics = {}
+    for key, value in config.items():
+        if isinstance(value, bool):
+            metrics[f"online/config/{key}"] = float(value)
+        elif isinstance(value, (int, float)):
+            metrics[f"online/config/{key}"] = float(value)
+    return metrics
+
+
+def acquire_parent_lock(online_root: Path):
+    """Prevent two parent drivers from writing the same online run concurrently."""
+    lock_path = online_root / ".swanlab_parent.lock"
+    handle = lock_path.open("a+", encoding="utf-8")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as error:
+        handle.close()
+        raise RuntimeError(
+            f"another SwanLab parent already owns ONLINE_ROOT: {online_root}"
+        ) from error
+    handle.seek(0)
+    handle.truncate()
+    handle.write(f"pid={os.getpid()}\n")
+    handle.flush()
+    return handle
 
 
 def parse_metric_event(line: str) -> tuple[dict, int | None] | None:
@@ -88,7 +262,9 @@ def replay_completed_training_metrics(
     return replayed
 
 
-def log_startup_status(swanlab_module: Any, online_root: Path) -> dict[str, float]:
+def log_startup_status(
+    swanlab_module: Any, online_root: Path, runtime_config: dict[str, Any] | None = None
+) -> dict[str, float]:
     state_path = online_root / "state.json"
     state = (
         json.loads(state_path.read_text(encoding="utf-8"))
@@ -103,17 +279,8 @@ def log_startup_status(swanlab_module: Any, online_root: Path) -> dict[str, floa
         "online/status/accepted_total": float(state.get("accepted_total", 0)),
         "online/status/consumed_total": float(state.get("consumed_total", 0)),
     }
-    for environment_name, metric_name in (
-        ("BUFFER_CAPACITY", "online/config/buffer_capacity"),
-        ("Q_PER_ROUND", "online/config/q_per_round"),
-        ("CANDIDATES_PER_Q", "online/config/candidates_per_q"),
-        ("TRAIN_GLOBAL_BATCH", "online/config/train_global_batch"),
-        ("PSEUDO_EPOCHS_PER_UPDATE", "online/config/pseudo_epochs_per_update"),
-        ("REAL_FRACTION", "online/config/real_fraction"),
-    ):
-        value = os.getenv(environment_name)
-        if value is not None:
-            metrics[metric_name] = float(value)
+    if runtime_config is not None:
+        metrics.update(runtime_config_metrics(runtime_config))
     swanlab_module.log(metrics)
     return metrics
 
@@ -139,6 +306,7 @@ def main() -> None:
     import swanlab
 
     args.online_root.mkdir(parents=True, exist_ok=True)
+    parent_lock = acquire_parent_lock(args.online_root)
     run_id_path = args.online_root / "swanlab_run_id"
     if run_id_path.is_file():
         run_id = run_id_path.read_text(encoding="utf-8").strip()
@@ -148,15 +316,24 @@ def main() -> None:
     log_dir = args.log_dir or args.online_root / "swanlab"
 
     swanlab.login(api_key=api_key, save=False)
+    runtime_config = build_runtime_config(args.online_root, run_id)
+    runtime_config.update(
+        {
+            "swanlab.project": args.project,
+            "swanlab.group": args.group,
+            "swanlab.name": args.name,
+            "launcher.child_command": args.command,
+        }
+    )
+    (args.online_root / "swanlab_runtime_config.json").write_text(
+        json.dumps(runtime_config, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     run = swanlab.init(
         project=args.project,
         group=args.group,
         name=args.name,
-        config={
-            "stream": "online_dual_rft",
-            "schema_version": 2,
-            "swanlab_owner": "main_orchestrator",
-        },
+        config=runtime_config,
         mode="online",
         log_dir=str(log_dir),
         id=run_id,
@@ -179,7 +356,9 @@ def main() -> None:
         collection_logger.log_completed()
         metric_state_path = args.online_root / "swanlab_metric_upload_state.json"
         replay_completed_training_metrics(swanlab, args.online_root, metric_state_path)
-        startup_metrics = log_startup_status(swanlab, args.online_root)
+        startup_metrics = log_startup_status(
+            swanlab, args.online_root, runtime_config
+        )
         current_update_round = int(startup_metrics["rft/update_round"])
 
         child_env = os.environ.copy()
@@ -226,6 +405,18 @@ def main() -> None:
                         "rft/update_round": float(current_update_round),
                     }
                 )
+            update_start = UPDATE_START.search(line)
+            if update_start is not None:
+                update_index = int(update_start.group(1))
+                update_metrics = runtime_config_metrics(runtime_config)
+                update_metrics.update(
+                    {
+                        "online/status/update_started": float(update_index + 1),
+                        "online/status/training_running": 1.0,
+                        "rft/update_round": float(update_index),
+                    }
+                )
+                swanlab.log(update_metrics)
             collect_start = COLLECT_START.search(line)
             if collect_start is not None:
                 collect_index = int(collect_start.group(1))
@@ -245,6 +436,7 @@ def main() -> None:
             raise subprocess.CalledProcessError(return_code, args.command)
     finally:
         swanlab.finish()
+        parent_lock.close()
 
 
 if __name__ == "__main__":
