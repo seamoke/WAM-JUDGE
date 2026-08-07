@@ -34,6 +34,7 @@ class OnlineRFTSwanLabDriverTest(unittest.TestCase):
             "TRAIN_GLOBAL_BATCH": "256",
             "PSEUDO_EPOCHS_PER_UPDATE": "3",
             "REAL_FRACTION": "0.7",
+            "ALLOW_MISSING_LATENT_SEGMENTS": "19",
         }
         with mock.patch.dict("os.environ", environment, clear=True):
             config = build_runtime_config(Path("/tmp/online"), "run-1")
@@ -42,6 +43,7 @@ class OnlineRFTSwanLabDriverTest(unittest.TestCase):
         self.assertEqual(config["training.gradient_accumulation_steps"], 1)
         self.assertEqual(config["training.effective_update_steps"], 40)
         self.assertEqual(config["replay.buffer_capacity"], 1024)
+        self.assertEqual(config["data.allow_missing_latent_segments"], 19)
 
     def test_parse_training_metric_event(self) -> None:
         parsed = parse_metric_event(

@@ -44,6 +44,7 @@ RUNTIME_CONFIG_ENV = {
     "data.real_data_mode": "REAL_DATA_MODE",
     "data.expected_per_domain_total": "EXPECTED_PER_DOMAIN_TOTAL",
     "data.expected_stage1_per_domain": "EXPECTED_STAGE1_PER_DOMAIN",
+    "data.allow_missing_latent_segments": "ALLOW_MISSING_LATENT_SEGMENTS",
     "data.history_frames": "HISTORY_FRAMES",
     "data.context_pool_multiplier": "CONTEXT_POOL_MULTIPLIER",
     "data.max_episode_frames": "MAX_EPISODE_FRAMES",
@@ -86,6 +87,7 @@ INTEGER_ENV = {
     "MODEL_SAVE_EVERY_UPDATES",
     "EXPECTED_PER_DOMAIN_TOTAL",
     "EXPECTED_STAGE1_PER_DOMAIN",
+    "ALLOW_MISSING_LATENT_SEGMENTS",
     "HISTORY_FRAMES",
     "MAX_EPISODE_FRAMES",
 }

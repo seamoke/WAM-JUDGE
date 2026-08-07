@@ -29,6 +29,7 @@ SWANLAB_NAME="${SWANLAB_NAME:-robotwin-stage2-online-dual-rft}"
 SWANLAB_API_KEY_FILE="${SWANLAB_API_KEY_FILE:-$PROJECT_ROOT/.secrets/swanlab_api_key}"
 EXPECTED_PER_DOMAIN_TOTAL="${EXPECTED_PER_DOMAIN_TOTAL:-50}"
 EXPECTED_STAGE1_PER_DOMAIN="${EXPECTED_STAGE1_PER_DOMAIN:-30}"
+ALLOW_MISSING_LATENT_SEGMENTS="${ALLOW_MISSING_LATENT_SEGMENTS:-19}"
 BUFFER_CAPACITY="${BUFFER_CAPACITY:-1024}"
 Q_PER_ROUND="${Q_PER_ROUND:-320}"
 CANDIDATES_PER_Q="${CANDIDATES_PER_Q:-8}"
@@ -76,6 +77,9 @@ Common options:
                       Existing selected action-visible replay root. If absent,
                       it is built at PREPARED_ROOT/action_visible_real.
   --real-data-link-mode hardlink|copy|symlink (use copy before migration).
+  --allow-missing-latent-segments N
+                      Tolerate known upstream latent gaps while building and
+                      verifying the action-visible replay set (default: 19).
   --output-root PATH  Run directory. Defaults to a timestamped train_out path.
   --gpu-ids IDS       Comma-separated GPU IDs (default: 0,1,2,3).
   --fresh             Delete OUTPUT_ROOT before starting. Never implied.
@@ -126,6 +130,7 @@ while [[ $# -gt 0 ]]; do
     --max-pseudo-per-context) require_value "$@"; MAX_PSEUDO_PER_CONTEXT="$2"; shift 2 ;;
     --expected-per-domain-total) require_value "$@"; EXPECTED_PER_DOMAIN_TOTAL="$2"; shift 2 ;;
     --expected-stage1-per-domain) require_value "$@"; EXPECTED_STAGE1_PER_DOMAIN="$2"; shift 2 ;;
+    --allow-missing-latent-segments) require_value "$@"; ALLOW_MISSING_LATENT_SEGMENTS="$2"; shift 2 ;;
     --history-frames) require_value "$@"; HISTORY_FRAMES="$2"; shift 2 ;;
     --context-pool-multiplier) require_value "$@"; CONTEXT_POOL_MULTIPLIER="$2"; shift 2 ;;
     --max-episode-frames) require_value "$@"; MAX_EPISODE_FRAMES="$2"; shift 2 ;;
@@ -211,11 +216,13 @@ if [[ "$REAL_DATA_MODE" == "stage1-stage2-visible" ]]; then
       --prepared-root "$PREPARED_DATA_ROOT" \
       --output-root "$REAL_DATA_ROOT" \
       --link-mode "$REAL_DATA_LINK_MODE" \
+      --allow-missing-latent-segments "$ALLOW_MISSING_LATENT_SEGMENTS" \
       "${source_args[@]}"
   fi
   "$PYTHON" -m robotwin_critic.two_stage_rft.prepare_action_visible_real \
     --prepared-root "$PREPARED_DATA_ROOT" \
     --output-root "$REAL_DATA_ROOT" \
+    --allow-missing-latent-segments "$ALLOW_MISSING_LATENT_SEGMENTS" \
     --verify-only
 fi
 
@@ -301,6 +308,7 @@ export BUFFER_CAPACITY TRAIN_BATCH_SIZE_PER_GPU TRAIN_GLOBAL_BATCH
 export PSEUDO_EPOCHS_PER_UPDATE REAL_FRACTION MAX_UPDATES MODEL_SAVE_EVERY_UPDATES
 export MIN_ACTION_SCORE MIN_PROCESS_SCORE MAX_PSEUDO_PER_CONTEXT
 export EXPECTED_PER_DOMAIN_TOTAL EXPECTED_STAGE1_PER_DOMAIN
+export ALLOW_MISSING_LATENT_SEGMENTS
 export HISTORY_FRAMES CONTEXT_POOL_MULTIPLIER MAX_EPISODE_FRAMES BASE_SEED
 export TRAIN_ACTIVATION_CHECKPOINTING
 export ACTION_GATE_POLICY=score_with_safety_gates
