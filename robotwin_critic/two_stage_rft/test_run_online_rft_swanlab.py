@@ -27,20 +27,20 @@ class OnlineRFTSwanLabDriverTest(unittest.TestCase):
 
     def test_runtime_config_contains_derived_training_shape(self) -> None:
         environment = {
-            "INFER_GPU_IDS": "0,1,2,3",
-            "Q_PER_ROUND": "128",
+            "INFER_GPU_IDS": "0,1,2,3,4,5,6,7",
+            "Q_PER_ROUND": "320",
             "BUFFER_CAPACITY": "1024",
             "TRAIN_BATCH_SIZE_PER_GPU": "8",
-            "TRAIN_GLOBAL_BATCH": "32",
+            "TRAIN_GLOBAL_BATCH": "256",
             "PSEUDO_EPOCHS_PER_UPDATE": "3",
-            "REAL_FRACTION": "0.5",
+            "REAL_FRACTION": "0.7",
         }
         with mock.patch.dict("os.environ", environment, clear=True):
             config = build_runtime_config(Path("/tmp/online"), "run-1")
-        self.assertEqual(config["sampling.num_gpus"], 4)
-        self.assertEqual(config["sampling.q_per_gpu"], 32)
-        self.assertEqual(config["training.gradient_accumulation_steps"], 1)
-        self.assertEqual(config["training.effective_update_steps"], 192)
+        self.assertEqual(config["sampling.num_gpus"], 8)
+        self.assertEqual(config["sampling.q_per_gpu"], 40)
+        self.assertEqual(config["training.gradient_accumulation_steps"], 4)
+        self.assertEqual(config["training.effective_update_steps"], 40)
         self.assertEqual(config["replay.buffer_capacity"], 1024)
 
     def test_parse_training_metric_event(self) -> None:
