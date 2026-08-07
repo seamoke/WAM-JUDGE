@@ -15,9 +15,18 @@ from PIL import Image
 from robotwin_critic.two_stage_rft.data_access import CAMERAS
 from robotwin_critic.two_stage_rft.protocol import sha256_file
 from robotwin_critic.vlac_finetune.common import (
+    VideoDecodeError,
     VideoFrameReader,
     make_tshape_state,
     read_jsonl,
+)
+
+
+SKIPPABLE_CONTEXT_ERRORS = (
+    FileNotFoundError,
+    IndexError,
+    OSError,
+    VideoDecodeError,
 )
 
 
@@ -61,6 +70,44 @@ def current_observation(row: dict, reader: VideoFrameReader) -> tuple[dict, np.n
     return {"obs": [images]}, make_tshape_state([images[camera] for camera in CAMERAS])
 
 
+def load_context_batch(
+    indexed_contexts: list[tuple[int, dict]],
+    reader: VideoFrameReader,
+    output_dir: Path,
+    *,
+    rank: int,
+) -> tuple[list[tuple[int, dict]], list[dict], list[Path], list[dict]]:
+    """Load readable contexts while recording corrupt/missing videos."""
+    valid_contexts: list[tuple[int, dict]] = []
+    observations: list[dict] = []
+    current_paths: list[Path] = []
+    skipped: list[dict] = []
+    for context_index, context in indexed_contexts:
+        try:
+            observation, current_mosaic = current_observation(context, reader)
+        except SKIPPABLE_CONTEXT_ERRORS as error:
+            skipped.append(
+                {
+                    "context_index": context_index,
+                    "context_id": str(context.get("context_id", "")),
+                    "task": str(context.get("task", "unknown")),
+                    "episode_index": context.get("episode_index"),
+                    "error_type": type(error).__name__,
+                    "error": str(error),
+                    "video_paths": context.get("video_paths", {}),
+                }
+            )
+            continue
+        context_dir = output_dir / f"context_{context_index:07d}"
+        current_path = context_dir / "current.jpg"
+        if rank == 0:
+            save_image(current_path, current_mosaic)
+        valid_contexts.append((context_index, context))
+        observations.append(observation)
+        current_paths.append(current_path)
+    return valid_contexts, observations, current_paths, skipped
+
+
 def distributed_context() -> tuple[int, int, int]:
     rank = int(os.environ.get("RANK", "0"))
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
@@ -90,6 +137,7 @@ def main() -> None:
         contexts = contexts[: args.max_contexts]
     context_file_sha256 = sha256_file(args.contexts)
     output_jsonl = args.output_dir / "candidates.jsonl"
+    skipped_jsonl = args.output_dir / "skipped_contexts.jsonl"
     summary_path = args.output_dir / "generation_summary.json"
     args.output_dir.mkdir(parents=True, exist_ok=True)
     if output_jsonl.exists() and not args.resume:
@@ -142,10 +190,21 @@ def main() -> None:
         completed = {
             str(row["candidate_id"]) for row in read_jsonl(output_jsonl)
         }
+    skipped_context_ids = set()
+    if skipped_jsonl.is_file() and args.resume:
+        skipped_context_ids = {
+            str(row["context_id"]) for row in read_jsonl(skipped_jsonl)
+        }
+    skipped_count = len(skipped_context_ids)
 
     with VideoFrameReader(max_cached_videos=12) as reader:
         output_handle = (
             output_jsonl.open("a" if args.resume else "w", encoding="utf-8")
+            if rank == 0
+            else None
+        )
+        skipped_handle = (
+            skipped_jsonl.open("a" if args.resume else "w", encoding="utf-8")
             if rank == 0
             else None
         )
@@ -157,16 +216,34 @@ def main() -> None:
                         start=batch_start,
                     )
                 )
-                observations = []
-                current_paths = []
-                for context_index, context in indexed_contexts:
-                    observation, current_mosaic = current_observation(context, reader)
-                    context_dir = args.output_dir / f"context_{context_index:07d}"
-                    current_path = context_dir / "current.jpg"
-                    if rank == 0:
-                        save_image(current_path, current_mosaic)
-                    observations.append(observation)
-                    current_paths.append(current_path)
+                indexed_contexts = [
+                    item
+                    for item in indexed_contexts
+                    if str(item[1].get("context_id", "")) not in skipped_context_ids
+                ]
+                indexed_contexts, observations, current_paths, skipped = (
+                    load_context_batch(
+                        indexed_contexts,
+                        reader,
+                        args.output_dir,
+                        rank=rank,
+                    )
+                )
+                if skipped and rank == 0:
+                    for record in skipped:
+                        skipped_handle.write(
+                            json.dumps(record, ensure_ascii=False) + "\n"
+                        )
+                        skipped_context_ids.add(record["context_id"])
+                    skipped_handle.flush()
+                    skipped_count += len(skipped)
+                    print(
+                        "ROBOTWIN_WAM_CONTEXTS_SKIPPED "
+                        + json.dumps(skipped, ensure_ascii=False),
+                        flush=True,
+                    )
+                if not indexed_contexts:
+                    continue
                 for candidate_index in range(args.candidates_per_context):
                     active = [
                         (local_index, context_index, context)
@@ -270,17 +347,24 @@ def main() -> None:
         finally:
             if output_handle is not None:
                 output_handle.close()
+            if skipped_handle is not None:
+                skipped_handle.close()
     if rank == 0:
         summary = {
             "contexts": len(contexts),
+            "contexts_skipped": skipped_count,
+            "contexts_generated": len(contexts) - skipped_count,
             "candidates_per_context": args.candidates_per_context,
             "inference_batch_size": args.inference_batch_size,
             "base_seed": args.base_seed,
-            "candidates": len(contexts) * args.candidates_per_context,
+            "candidates": (
+                len(contexts) - skipped_count
+            ) * args.candidates_per_context,
             "resumed_candidates": len(completed),
             "model": str(args.model.resolve()),
             "config_name": args.config_name,
             "output": str(output_jsonl.resolve()),
+            "skipped_contexts_output": str(skipped_jsonl.resolve()),
             "context_file": str(args.contexts.resolve()),
             "context_file_sha256": context_file_sha256,
             "generated_images_decoded": False,
