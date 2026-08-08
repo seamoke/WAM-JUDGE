@@ -33,10 +33,11 @@ ALLOW_MISSING_LATENT_SEGMENTS="${ALLOW_MISSING_LATENT_SEGMENTS:-19}"
 BUFFER_CAPACITY="${BUFFER_CAPACITY:-1024}"
 Q_PER_ROUND="${Q_PER_ROUND:-320}"
 CANDIDATES_PER_Q="${CANDIDATES_PER_Q:-8}"
-INFERENCE_BATCH_SIZE_PER_GPU="${INFERENCE_BATCH_SIZE_PER_GPU:-2}"
+INFERENCE_BATCH_SIZE_PER_GPU="${INFERENCE_BATCH_SIZE_PER_GPU:-8}"
 VLAC_BATCH_SIZE_PER_GPU="${VLAC_BATCH_SIZE_PER_GPU:-4}"
-TRAIN_BATCH_SIZE_PER_GPU="${TRAIN_BATCH_SIZE_PER_GPU:-32}"
-TRAIN_GLOBAL_BATCH="${TRAIN_GLOBAL_BATCH:-256}"
+TRAIN_BATCH_SIZE_PER_GPU="${TRAIN_BATCH_SIZE_PER_GPU:-64}"
+GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-1}"
+TRAIN_GLOBAL_BATCH="${TRAIN_GLOBAL_BATCH:-512}"
 PSEUDO_EPOCHS_PER_UPDATE="${PSEUDO_EPOCHS_PER_UPDATE:-3}"
 REAL_FRACTION="${REAL_FRACTION:-0.7}"
 MAX_UPDATES="${MAX_UPDATES:-1000}"
@@ -48,7 +49,7 @@ HISTORY_FRAMES="${HISTORY_FRAMES:-4}"
 CONTEXT_POOL_MULTIPLIER="${CONTEXT_POOL_MULTIPLIER:-2.0}"
 MAX_EPISODE_FRAMES="${MAX_EPISODE_FRAMES:-500}"
 BASE_SEED="${BASE_SEED:-42}"
-TRAIN_ACTIVATION_CHECKPOINTING="${TRAIN_ACTIVATION_CHECKPOINTING:-1}"
+TRAIN_ACTIVATION_CHECKPOINTING="${TRAIN_ACTIVATION_CHECKPOINTING:-0}"
 PREPARE_ONLY="${PREPARE_ONLY:-0}"
 FRESH="${FRESH:-0}"
 
@@ -81,11 +82,12 @@ Common options:
                       Tolerate known upstream latent gaps while building and
                       verifying the action-visible replay set (default: 19).
   --output-root PATH  Run directory. Defaults to a timestamped train_out path.
-  --gpu-ids IDS       Comma-separated GPU IDs (default: 0,1,2,3).
+  --gpu-ids IDS       Comma-separated GPU IDs (default: 0,1,2,3,4,5,6,7).
   --fresh             Delete OUTPUT_ROOT before starting. Never implied.
   --prepare-only      Build Action Critic and Stage-2 contexts, then exit.
   --buffer-capacity N --q-per-round N --candidates-per-q N
-  --train-global-batch N --real-fraction X --max-updates N
+  --train-global-batch N --gradient-accumulation-steps N
+  --real-fraction X --max-updates N
   --model-save-every-updates N
   --swanlab-project NAME --swanlab-group NAME --swanlab-name NAME
   --swanlab-api-key-file PATH
@@ -121,6 +123,7 @@ while [[ $# -gt 0 ]]; do
     --vlac-batch-size-per-gpu) require_value "$@"; VLAC_BATCH_SIZE_PER_GPU="$2"; shift 2 ;;
     --train-batch-size-per-gpu) require_value "$@"; TRAIN_BATCH_SIZE_PER_GPU="$2"; shift 2 ;;
     --train-global-batch) require_value "$@"; TRAIN_GLOBAL_BATCH="$2"; shift 2 ;;
+    --gradient-accumulation-steps) require_value "$@"; GRADIENT_ACCUMULATION_STEPS="$2"; shift 2 ;;
     --pseudo-epochs-per-update) require_value "$@"; PSEUDO_EPOCHS_PER_UPDATE="$2"; shift 2 ;;
     --real-fraction) require_value "$@"; REAL_FRACTION="$2"; shift 2 ;;
     --max-updates) require_value "$@"; MAX_UPDATES="$2"; shift 2 ;;
@@ -304,7 +307,7 @@ export SPLIT_MANIFEST="$PREPARED_DATA_ROOT/split_manifest.json"
 export INFER_GPU_IDS="$GPU_IDS"
 export INFER_BATCH_SIZE_PER_GPU="$INFERENCE_BATCH_SIZE_PER_GPU"
 export Q_PER_ROUND INFER_BATCH_SIZE_PER_GPU CANDIDATES_PER_Q VLAC_BATCH_SIZE_PER_GPU
-export BUFFER_CAPACITY TRAIN_BATCH_SIZE_PER_GPU TRAIN_GLOBAL_BATCH
+export BUFFER_CAPACITY TRAIN_BATCH_SIZE_PER_GPU TRAIN_GLOBAL_BATCH GRADIENT_ACCUMULATION_STEPS
 export PSEUDO_EPOCHS_PER_UPDATE REAL_FRACTION MAX_UPDATES MODEL_SAVE_EVERY_UPDATES
 export MIN_ACTION_SCORE MIN_PROCESS_SCORE MAX_PSEUDO_PER_CONTEXT
 export EXPECTED_PER_DOMAIN_TOTAL EXPECTED_STAGE1_PER_DOMAIN
