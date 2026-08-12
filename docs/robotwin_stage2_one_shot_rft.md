@@ -124,6 +124,11 @@ online/final_model/
 online/one_shot_complete.json
 ```
 
+`ONE_SHOT_DATA_FRACTION` defaults to `1.0`. At completion, the trained
+transformer is copied into `online/final_model/transformer/`; it is not a
+symlink to the training checkpoint. The original checkpoint is retained as a
+second recoverable copy.
+
 `state.json` makes collection resumable. Do not delete completed `collect_*`
 directories when resuming. SwanLab receives collection metrics, critic score
 distributions, data composition, latent/action losses, gradient norm, learning

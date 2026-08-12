@@ -15,6 +15,7 @@ def stage_model(
     output: Path,
     *,
     move_transformer: bool = False,
+    copy_transformer: bool = False,
 ) -> dict:
     base_model = base_model.expanduser().resolve()
     transformer = transformer.expanduser().resolve()
@@ -25,6 +26,8 @@ def stage_model(
         raise FileNotFoundError(f"Updated transformer is incomplete: {transformer}")
     if output.exists():
         raise FileExistsError(f"Refusing to overwrite staged model: {output}")
+    if move_transformer and copy_transformer:
+        raise ValueError("move_transformer and copy_transformer are mutually exclusive")
     temporary = output.with_name(f".{output.name}.tmp-{os.getpid()}")
     temporary.mkdir(parents=True)
     try:
@@ -34,15 +37,24 @@ def stage_model(
             (temporary / entry.name).symlink_to(entry.resolve())
         if move_transformer:
             transformer.rename(temporary / "transformer")
+        elif copy_transformer:
+            shutil.copytree(transformer, temporary / "transformer")
         else:
             (temporary / "transformer").symlink_to(transformer)
+        transformer_storage = (
+            "materialized"
+            if move_transformer
+            else "copied"
+            if copy_transformer
+            else "symlink"
+        )
         manifest = {
             "base_model": str(base_model),
             "updated_transformer": str(output / "transformer")
-            if move_transformer
+            if move_transformer or copy_transformer
             else str(transformer),
             "parameter_scope": "full_transformer",
-            "transformer_storage": "materialized" if move_transformer else "symlink",
+            "transformer_storage": transformer_storage,
         }
         (temporary / "online_rft_model.json").write_text(
             json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
@@ -63,6 +75,7 @@ def main() -> None:
     parser.add_argument("--transformer", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--move-transformer", action="store_true")
+    parser.add_argument("--copy-transformer", action="store_true")
     args = parser.parse_args()
     print(
         json.dumps(
@@ -71,6 +84,7 @@ def main() -> None:
                 args.transformer,
                 args.output,
                 move_transformer=args.move_transformer,
+                copy_transformer=args.copy_transformer,
             ),
             indent=2,
         )

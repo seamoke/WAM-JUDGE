@@ -406,7 +406,8 @@ run_one_shot_training() {
   "$WAM_PYTHON" -m robotwin_critic.two_stage_rft.stage_updated_model \
     --base-model "$INITIAL_MODEL" \
     --transformer "$train_root/checkpoints/checkpoint_step_${actual_steps}/transformer" \
-    --output "$final_model"
+    --output "$final_model" \
+    --copy-transformer
   "$WAM_PYTHON" -c 'import json,sys; from pathlib import Path; Path(sys.argv[1]).write_text(json.dumps({"complete": True, "pseudo_buffer": sys.argv[2], "train_root": sys.argv[3], "final_model": sys.argv[4], "optimizer_steps": int(sys.argv[5]), "epochs": int(sys.argv[6])}, indent=2)+"\n")' \
     "$ONE_SHOT_COMPLETE" "$ONE_SHOT_BUFFER" "$train_root" "$final_model" "$actual_steps" "$ONE_SHOT_TRAIN_EPOCHS"
   echo "ONE_SHOT_RFT_DONE pseudo=$ONE_SHOT_BUFFER model=$final_model steps=$actual_steps epochs=$ONE_SHOT_TRAIN_EPOCHS"

@@ -235,6 +235,26 @@ class OnlineIterationTest(unittest.TestCase):
             self.assertEqual((output / "transformer/weights.bin").read_bytes(), b"weights")
             self.assertEqual(manifest["transformer_storage"], "materialized")
 
+    def test_stage_model_can_copy_updated_transformer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            base = root / "base"
+            updated = root / "checkpoint/transformer"
+            (base / "transformer").mkdir(parents=True)
+            (base / "vae").mkdir()
+            updated.mkdir(parents=True)
+            (base / "transformer/config.json").write_text("{}")
+            (updated / "config.json").write_text("{}")
+            (updated / "weights.bin").write_bytes(b"weights")
+
+            output = root / "staged"
+            manifest = stage_model(base, updated, output, copy_transformer=True)
+
+            self.assertTrue((updated / "weights.bin").is_file())
+            self.assertFalse((output / "transformer").is_symlink())
+            self.assertEqual((output / "transformer/weights.bin").read_bytes(), b"weights")
+            self.assertEqual(manifest["transformer_storage"], "copied")
+
 
 if __name__ == "__main__":
     unittest.main()
