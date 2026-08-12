@@ -82,6 +82,41 @@ class OneShotBufferTest(unittest.TestCase):
             })
             self.assertEqual(set(summary["selected_by_progress_bin"]), {"0", "4"})
             self.assertTrue(all(row["rft_selection"]["one_shot"] for row in selected))
+            self.assertTrue(all(row["source_task"] in {"task_a", "task_b"} for row in selected))
+            self.assertTrue(all(row["source_stage"] == "unknown" for row in selected))
+            self.assertEqual(summary["selected_by_source_stage"], {"unknown": 4})
+
+    def test_backfills_stage2_rollout_provenance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            valid = root / "valid.jpg"
+            image = Image.new("L", (16, 16), color=80)
+            for x in range(8, 16):
+                for y in range(16):
+                    image.putpixel((x, y), 140)
+            image.save(valid)
+            selected, summary = finalize_buffer(
+                [{
+                    "candidate_id": "candidate",
+                    "context_id": "pick/clean/7/12",
+                    "task": "pick",
+                    "domain": "clean",
+                    "stage": "stage2_video_only",
+                    "source_episode_index": 7,
+                    "progress_fraction": 0.5,
+                    "generated_image": str(valid),
+                    "process_score": 8.0,
+                    "action_critic": {"action_score": 0.9},
+                }],
+                {"pick/clean": 1},
+                target=1,
+                visual_cache_path=root / "cache.jsonl",
+                min_action_distance=0.0,
+            )
+            self.assertEqual(selected[0]["source_task"], "pick")
+            self.assertEqual(selected[0]["source_stage"], "stage2")
+            self.assertEqual(summary["selected_by_task"], {"pick": 1})
+            self.assertEqual(summary["selected_by_source_stage"], {"stage2": 1})
 
     def test_backfills_an_unreachable_group_quota(self):
         with tempfile.TemporaryDirectory() as directory:
