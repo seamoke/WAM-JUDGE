@@ -9,6 +9,7 @@ from robotwin_critic.two_stage_rft.online_iteration import (
     commit_collect,
     complete_update,
     initialize_state,
+    load_state,
     prepare_collect,
     read_jsonl,
     select_online_winners,
@@ -24,6 +25,44 @@ def write_jsonl(path: Path, rows: list[dict]) -> None:
 
 
 class OnlineIterationTest(unittest.TestCase):
+    def test_collect_only_capacity_never_creates_ready_buffer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            contexts = root / "contexts.jsonl"
+            model = root / "model"
+            model.mkdir()
+            contexts.write_text('{"context_id":"q"}\n', encoding="utf-8")
+            state_path = root / "state.json"
+            initialize_state(state_path, contexts, model, base_seed=1)
+            collect = root / "collect"
+            prepare_collect(state_path, collect, workers=1, q_per_worker=1)
+            scored = collect / "scored.jsonl"
+            scored.write_text(
+                json.dumps({
+                    "candidate_id": "c",
+                    "context_id": "q@e0",
+                    "process_score": 8.0,
+                    "process_critic": {"numeric_parsed": True},
+                    "action_critic": {"accepted": True, "action_score": 0.9},
+                }) + "\n",
+                encoding="utf-8",
+            )
+            manifest = root / "split.json"
+            manifest.write_text("{}\n", encoding="utf-8")
+            summary = commit_collect(
+                state_path,
+                collect,
+                scored,
+                root / "pending.jsonl",
+                root / "buffers",
+                capacity=0,
+                min_action_score=0.5,
+                min_process_score=0.0,
+                split_manifest=manifest,
+            )
+            self.assertIsNone(load_state(state_path)["ready_buffer"])
+            self.assertEqual(summary["pending_after_commit"], 1)
+
     def test_prepare_shards_global_q_and_wraps_without_collision(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

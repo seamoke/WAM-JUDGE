@@ -251,6 +251,8 @@ def commit_collect(
     split_manifest: Path,
     max_per_context: int = 1,
 ) -> dict:
+    if capacity < 0:
+        raise ValueError("capacity must be non-negative; zero is collect-only")
     state = load_state(state_path)
     manifest = json.loads(
         (collect_dir / "collect_manifest.json").read_text(encoding="utf-8")
@@ -272,7 +274,7 @@ def commit_collect(
         row for row in selected if str(row["candidate_id"]) not in known
     )
     ready_buffer = None
-    if len(pending) >= capacity:
+    if capacity > 0 and len(pending) >= capacity:
         buffers_dir.mkdir(parents=True, exist_ok=True)
         ready_buffer = (
             buffers_dir / f"buffer_update_{int(state['update_index']):06d}.jsonl"
@@ -349,7 +351,12 @@ def main() -> None:
     commit.add_argument("--scored", type=Path, required=True)
     commit.add_argument("--pending", type=Path, required=True)
     commit.add_argument("--buffers-dir", type=Path, required=True)
-    commit.add_argument("--capacity", type=int, default=64)
+    commit.add_argument(
+        "--capacity",
+        type=int,
+        default=64,
+        help="Training buffer size; zero accumulates candidates without updates.",
+    )
     commit.add_argument("--min-action-score", type=float, default=0.5)
     commit.add_argument("--min-process-score", type=float, default=5.0)
     commit.add_argument(

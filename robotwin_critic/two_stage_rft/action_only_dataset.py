@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+from collections import OrderedDict
 from pathlib import Path
 
 import numpy as np
@@ -178,6 +179,173 @@ class FirstTransitionChunkDataset(torch.utils.data.Dataset):
         return item
 
 
+class AllTransitionChunkDataset(torch.utils.data.Dataset):
+    """Expose every adjacent real latent-frame transition as one F=2 sample.
+
+    The official loader stores a complete action segment in one latent file.
+    This view indexes every adjacent frame pair without copying those files. A
+    small per-worker LRU keeps consecutive transitions from reloading the same
+    source segment.
+    """
+
+    def __init__(
+        self,
+        dataset,
+        *,
+        frame_chunk_size: int = 2,
+        cache_segments: int = 4,
+        transition_index: list[tuple[int, int]] | None = None,
+    ):
+        if frame_chunk_size != 2:
+            raise ValueError("Transition chunk training requires frame_chunk_size=2")
+        if len(dataset) == 0:
+            raise ValueError("Real dataset must be non-empty")
+        self.dataset = dataset
+        self.frame_chunk_size = frame_chunk_size
+        self.cache_segments = max(int(cache_segments), 0)
+        self._cache: OrderedDict[int, dict] = OrderedDict()
+        self._can_rebase_actions = transition_index is None
+        self.transition_index = (
+            list(transition_index)
+            if transition_index is not None
+            else self._build_transition_index()
+        )
+        if not self.transition_index:
+            raise ValueError("Real dataset contains no adjacent latent transitions")
+
+    def _build_transition_index(self) -> list[tuple[int, int]]:
+        result = []
+        for dataset_id, source in enumerate(self.dataset._datasets):
+            global_offset = int(self.dataset.acc_dset_num[dataset_id])
+            camera = source.used_video_keys[0]
+            for local_index, meta in enumerate(source.new_metas):
+                episode_index = int(meta["episode_index"])
+                start = int(meta["start_frame"])
+                end = int(meta["end_frame"])
+                episode_chunk = source.meta.get_episode_chunk(episode_index)
+                latent_file = (
+                    Path(source.latent_path)
+                    / f"chunk-{episode_chunk:03d}"
+                    / camera
+                    / f"episode_{episode_index:06d}_{start}_{end}.pth"
+                )
+                try:
+                    payload = torch.load(
+                        latent_file,
+                        map_location="cpu",
+                        weights_only=False,
+                        mmap=True,
+                    )
+                except TypeError:
+                    payload = torch.load(
+                        latent_file, map_location="cpu", weights_only=False
+                    )
+                latent_frames = int(payload["latent_num_frames"])
+                result.extend(
+                    (global_offset + local_index, offset)
+                    for offset in range(max(latent_frames - 1, 0))
+                )
+        return result
+
+    def __len__(self) -> int:
+        return len(self.transition_index)
+
+    def _source_record(self, source_index: int) -> dict:
+        if source_index in self._cache:
+            record = self._cache.pop(source_index)
+            self._cache[source_index] = record
+            return record
+        record = {"item": self.dataset[source_index]}
+        if self._can_rebase_actions:
+            dataset_id = int(self.dataset.item_id_to_dataset_id[source_index])
+            source = self.dataset._datasets[dataset_id]
+            local_index = source_index - int(self.dataset.acc_dset_num[dataset_id])
+            meta = source.new_metas[local_index]
+            episode_index = int(meta["episode_index"])
+            start = int(meta["start_frame"])
+            end = int(meta["end_frame"])
+            episode_chunk = source.meta.get_episode_chunk(episode_index)
+            latent_file = (
+                Path(source.latent_path)
+                / f"chunk-{episode_chunk:03d}"
+                / source.used_video_keys[0]
+                / f"episode_{episode_index:06d}_{start}_{end}.pth"
+            )
+            latent_payload = torch.load(
+                latent_file, map_location="cpu", weights_only=False
+            )
+            global_start = source._get_global_idx(episode_index, start)
+            global_end = source._get_global_idx(episode_index, end)
+            raw_actions = source._get_range_hf_data(global_start, global_end)["action"]
+            record.update(
+                {
+                    "source": source,
+                    "meta": meta,
+                    "frame_ids": latent_payload["frame_ids"],
+                    "latent_frames": int(latent_payload["latent_num_frames"]),
+                    "raw_actions": raw_actions,
+                }
+            )
+        if self.cache_segments:
+            self._cache[source_index] = record
+            while len(self._cache) > self.cache_segments:
+                self._cache.popitem(last=False)
+        return record
+
+    @staticmethod
+    def _rebased_actions(record: dict, offset: int):
+        source = record["source"]
+        meta = record["meta"]
+        frame_ids = record["frame_ids"]
+        latent_frames = int(record["latent_frames"])
+        if latent_frames < 2:
+            raise ValueError("Cannot extract a transition from fewer than two frames")
+        compressed_steps = (len(frame_ids) - 1) // (latent_frames - 1)
+        if compressed_steps <= 0 or (
+            (len(frame_ids) - 1) % (latent_frames - 1)
+        ):
+            raise ValueError(
+                f"Unexpected frame-id geometry: ids={len(frame_ids)} F={latent_frames}"
+            )
+        begin = offset * compressed_steps
+        stop = (offset + 1) * compressed_steps + 1
+        pair_frame_ids = frame_ids[begin:stop]
+        actions, mask = source._action_post_process(
+            int(meta["start_frame"]),
+            int(meta["end_frame"]),
+            pair_frame_ids,
+            record["raw_actions"],
+        )
+        return actions, mask
+
+    def __getitem__(self, index: int) -> dict:
+        source_index, offset = self.transition_index[index % len(self.transition_index)]
+        record = self._source_record(source_index)
+        source = record["item"]
+        stop = offset + self.frame_chunk_size
+        frames = int(source["latents"].shape[1])
+        if stop > frames:
+            raise IndexError(
+                f"Transition [{offset},{stop}) exceeds source F={frames}"
+            )
+        item = dict(source)
+        item["latents"] = source["latents"][:, offset:stop].clone()
+        if self._can_rebase_actions:
+            item["actions"], item["actions_mask"] = self._rebased_actions(
+                record, offset
+            )
+        else:
+            for key in ("actions", "actions_mask"):
+                item[key] = source[key][:, offset:stop].clone()
+        # Every extracted pair starts with a fresh conditioning frame.
+        item["actions"][:, 0] = 0.0
+        item["actions_mask"][:, 0] = False
+        item["latents_mask"] = torch.ones(
+            self.frame_chunk_size, dtype=torch.bool
+        )
+        return item
+
+
 def mixed_pad_latent_batch_collate(batch: list[dict], base_collate) -> dict:
     """Run the official padded collate while retaining RFT source labels."""
     sources = torch.stack(
@@ -238,3 +406,59 @@ class RatioMixedDataset(torch.utils.data.Dataset):
         item = dict(self.pseudo_dataset[source_index % len(self.pseudo_dataset)])
         item["_rft_source"] = torch.tensor(1, dtype=torch.int64)
         return item
+
+
+class UnionRFTDataset(torch.utils.data.Dataset):
+    """Concatenate real and pseudo samples so each appears once per epoch."""
+
+    def __init__(self, real_dataset, pseudo_dataset):
+        if len(real_dataset) == 0 or len(pseudo_dataset) == 0:
+            raise ValueError("Real and pseudo datasets must both be non-empty")
+        self.real_dataset = real_dataset
+        self.pseudo_dataset = pseudo_dataset
+
+    def __len__(self) -> int:
+        return len(self.real_dataset) + len(self.pseudo_dataset)
+
+    def source_for_index(self, index: int) -> str:
+        return "real" if index < len(self.real_dataset) else "pseudo"
+
+    def __getitem__(self, index: int) -> dict:
+        index %= len(self)
+        if index < len(self.real_dataset):
+            item = dict(self.real_dataset[index])
+            item["_rft_source"] = torch.tensor(0, dtype=torch.int64)
+            return item
+        item = dict(self.pseudo_dataset[index - len(self.real_dataset)])
+        item["_rft_source"] = torch.tensor(1, dtype=torch.int64)
+        return item
+
+
+class DeterministicFractionDataset(torch.utils.data.Dataset):
+    """Select a reproducible fraction without changing the source dataset."""
+
+    def __init__(self, dataset, *, fraction: float, seed: int = 42):
+        if not 0.0 < fraction <= 1.0:
+            raise ValueError("fraction must be in (0,1]")
+        if len(dataset) == 0:
+            raise ValueError("Dataset must be non-empty")
+        self.dataset = dataset
+        self.fraction = float(fraction)
+        self.seed = int(seed)
+        selected = max(1, int(math.floor(len(dataset) * fraction + 0.5)))
+        if selected >= len(dataset):
+            self.indices = list(range(len(dataset)))
+        else:
+            generator = np.random.default_rng(self.seed)
+            self.indices = sorted(
+                int(index)
+                for index in generator.choice(
+                    len(dataset), size=selected, replace=False
+                ).tolist()
+            )
+
+    def __len__(self) -> int:
+        return len(self.indices)
+
+    def __getitem__(self, index: int):
+        return self.dataset[self.indices[index % len(self.indices)]]

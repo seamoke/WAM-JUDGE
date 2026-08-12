@@ -12,16 +12,20 @@ try:
     import torch
 
     from robotwin_critic.two_stage_rft.action_only_dataset import (
+        AllTransitionChunkDataset,
         FirstTransitionChunkDataset,
         GeneratedChunkDataset,
         RatioMixedDataset,
+        UnionRFTDataset,
         generated_actions_to_tensor,
         mixed_pad_latent_batch_collate,
     )
 except ImportError:
     torch = None
+    AllTransitionChunkDataset = None
     GeneratedChunkDataset = None
     RatioMixedDataset = None
+    UnionRFTDataset = None
     generated_actions_to_tensor = None
     FirstTransitionChunkDataset = None
     mixed_pad_latent_batch_collate = None
@@ -41,6 +45,42 @@ class TinyDataset:
 
 @unittest.skipIf(RatioMixedDataset is None, "torch is required")
 class ActionOnlyDatasetTest(unittest.TestCase):
+    def test_all_transition_view_and_union_cover_every_sample(self) -> None:
+        class RealDataset:
+            def __len__(self):
+                return 2
+
+            def __getitem__(self, index):
+                base = float(index * 10)
+                return {
+                    "latents": torch.arange(4).reshape(1, 4, 1, 1).float() + base,
+                    "actions": torch.arange(4).reshape(1, 4, 1, 1).float() + base,
+                    "actions_mask": torch.ones(1, 4, 1, 1, dtype=torch.bool),
+                    "text_emb": torch.zeros(1),
+                }
+
+        real = AllTransitionChunkDataset(
+            RealDataset(), transition_index=[(0, 0), (0, 1), (1, 2)]
+        )
+        self.assertEqual(len(real), 3)
+        self.assertEqual(real[1]["latents"].flatten().tolist(), [1.0, 2.0])
+        self.assertFalse(real[1]["actions_mask"][:, 0].any())
+
+        class PseudoDataset:
+            def __len__(self):
+                return 2
+
+            def __getitem__(self, index):
+                return {"value": index}
+
+        union = UnionRFTDataset(real, PseudoDataset())
+        self.assertEqual(len(union), 5)
+        self.assertEqual(
+            [union.source_for_index(i) for i in range(5)],
+            ["real", "real", "real", "pseudo", "pseudo"],
+        )
+        self.assertEqual(union[4]["value"], 1)
+
     def test_ratio_dataset_marks_source_without_mutating_inputs(self) -> None:
         real_item = {"value": torch.tensor(1)}
         pseudo_item = {"value": torch.tensor(2)}

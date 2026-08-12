@@ -27,21 +27,29 @@ class OnlineRFTSwanLabDriverTest(unittest.TestCase):
 
     def test_runtime_config_contains_derived_training_shape(self) -> None:
         environment = {
-            "INFER_GPU_IDS": "0,1,2,3,4,5,6,7",
+            "INFER_GPU_IDS": "0,1",
+            "REMOTE_INFER_WORKERS": "2",
+            "REMOTE_GPU_IDS": "0,1",
             "Q_PER_ROUND": "320",
             "BUFFER_CAPACITY": "1024",
             "TRAIN_BATCH_SIZE_PER_GPU": "32",
-            "TRAIN_GLOBAL_BATCH": "256",
+            "TRAIN_GLOBAL_BATCH": "128",
+            "GRADIENT_ACCUMULATION_STEPS": "1",
+            "TRAIN_NNODES": "2",
+            "TRAIN_LOCAL_NGPU": "2",
+            "TRAIN_MASTER_ADDR": "10.0.0.1",
             "PSEUDO_EPOCHS_PER_UPDATE": "3",
             "REAL_FRACTION": "0.7",
             "ALLOW_MISSING_LATENT_SEGMENTS": "19",
         }
         with mock.patch.dict("os.environ", environment, clear=True):
             config = build_runtime_config(Path("/tmp/online"), "run-1")
-        self.assertEqual(config["sampling.num_gpus"], 8)
-        self.assertEqual(config["sampling.q_per_gpu"], 40)
+        self.assertEqual(config["sampling.local_num_gpus"], 2)
+        self.assertEqual(config["sampling.num_gpus"], 4)
+        self.assertEqual(config["sampling.q_per_gpu"], 80)
+        self.assertEqual(config["training.world_size"], 4)
         self.assertEqual(config["training.gradient_accumulation_steps"], 1)
-        self.assertEqual(config["training.effective_update_steps"], 40)
+        self.assertEqual(config["training.effective_update_steps"], 80)
         self.assertEqual(config["replay.buffer_capacity"], 1024)
         self.assertEqual(config["data.allow_missing_latent_segments"], 19)
 
