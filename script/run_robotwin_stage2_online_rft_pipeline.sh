@@ -23,19 +23,34 @@ BASE_MODEL="${BASE_MODEL:-$LINGBOT_ROOT/models/lingbot-va-base}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-}"
 ONLINE_ROOT="${ONLINE_ROOT:-}"
 GPU_IDS="${GPU_IDS:-0,1,2,3,4,5,6,7}"
+REMOTE_INFER_WORKERS="${REMOTE_INFER_WORKERS:-0}"
+REMOTE_GPU_IDS="${REMOTE_GPU_IDS:-0,1}"
+MULTINODE_QUEUE_ROOT="${MULTINODE_QUEUE_ROOT:-}"
+TRAIN_NNODES="${TRAIN_NNODES:-1}"
+TRAIN_LOCAL_NGPU="${TRAIN_LOCAL_NGPU:-}"
+TRAIN_MASTER_ADDR="${TRAIN_MASTER_ADDR:-127.0.0.1}"
+TRAIN_MASTER_PORT="${TRAIN_MASTER_PORT:-29641}"
+TRAIN_LAUNCHER="${TRAIN_LAUNCHER:-script/run_robotwin_joint_rft.sh}"
+NCCL_IB_DISABLE="${NCCL_IB_DISABLE:-1}"
+NCCL_NET="${NCCL_NET:-Socket}"
+NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME:-eth0}"
+NCCL_SOCKET_FAMILY="${NCCL_SOCKET_FAMILY:-AF_INET}"
+NCCL_CUMEM_HOST_ENABLE="${NCCL_CUMEM_HOST_ENABLE:-0}"
 SWANLAB_PROJECT="${SWANLAB_PROJECT:-lingbot-va-robotwin}"
 SWANLAB_GROUP="${SWANLAB_GROUP:-robotwin-stage1-real-stage2-pseudo}"
 SWANLAB_NAME="${SWANLAB_NAME:-robotwin-stage2-online-dual-rft}"
 SWANLAB_API_KEY_FILE="${SWANLAB_API_KEY_FILE:-$PROJECT_ROOT/.secrets/swanlab_api_key}"
 EXPECTED_PER_DOMAIN_TOTAL="${EXPECTED_PER_DOMAIN_TOTAL:-50}"
 EXPECTED_STAGE1_PER_DOMAIN="${EXPECTED_STAGE1_PER_DOMAIN:-30}"
+ALLOW_MISSING_LATENT_SEGMENTS="${ALLOW_MISSING_LATENT_SEGMENTS:-19}"
 BUFFER_CAPACITY="${BUFFER_CAPACITY:-1024}"
 Q_PER_ROUND="${Q_PER_ROUND:-320}"
 CANDIDATES_PER_Q="${CANDIDATES_PER_Q:-8}"
-INFERENCE_BATCH_SIZE_PER_GPU="${INFERENCE_BATCH_SIZE_PER_GPU:-2}"
+INFERENCE_BATCH_SIZE_PER_GPU="${INFERENCE_BATCH_SIZE_PER_GPU:-8}"
 VLAC_BATCH_SIZE_PER_GPU="${VLAC_BATCH_SIZE_PER_GPU:-4}"
-TRAIN_BATCH_SIZE_PER_GPU="${TRAIN_BATCH_SIZE_PER_GPU:-32}"
-TRAIN_GLOBAL_BATCH="${TRAIN_GLOBAL_BATCH:-256}"
+TRAIN_BATCH_SIZE_PER_GPU="${TRAIN_BATCH_SIZE_PER_GPU:-64}"
+GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-1}"
+TRAIN_GLOBAL_BATCH="${TRAIN_GLOBAL_BATCH:-512}"
 PSEUDO_EPOCHS_PER_UPDATE="${PSEUDO_EPOCHS_PER_UPDATE:-3}"
 REAL_FRACTION="${REAL_FRACTION:-0.7}"
 MAX_UPDATES="${MAX_UPDATES:-1000}"
@@ -43,11 +58,23 @@ MODEL_SAVE_EVERY_UPDATES="${MODEL_SAVE_EVERY_UPDATES:-25}"
 MIN_ACTION_SCORE="${MIN_ACTION_SCORE:-0.75}"
 MIN_PROCESS_SCORE="${MIN_PROCESS_SCORE:-5.0}"
 MAX_PSEUDO_PER_CONTEXT="${MAX_PSEUDO_PER_CONTEXT:-4}"
+ONE_SHOT_MODE="${ONE_SHOT_MODE:-0}"
+ONE_SHOT_TARGET="${ONE_SHOT_TARGET:-25000}"
+ONE_SHOT_DATA_FRACTION="${ONE_SHOT_DATA_FRACTION:-1.0}"
+ONE_SHOT_COLLECT_ROOT="${ONE_SHOT_COLLECT_ROOT:-}"
+ONE_SHOT_TRAIN_EPOCHS="${ONE_SHOT_TRAIN_EPOCHS:-3}"
+ONE_SHOT_MAX_PER_EPISODE="${ONE_SHOT_MAX_PER_EPISODE:-16}"
+ONE_SHOT_PROGRESS_BINS="${ONE_SHOT_PROGRESS_BINS:-5}"
+ONE_SHOT_MIN_ACTION_DISTANCE="${ONE_SHOT_MIN_ACTION_DISTANCE:-0.03}"
+ONE_SHOT_MIN_MEAN_LUMA="${ONE_SHOT_MIN_MEAN_LUMA:-8.0}"
+ONE_SHOT_MIN_STD_LUMA="${ONE_SHOT_MIN_STD_LUMA:-4.0}"
+ONE_SHOT_MAX_DARK_FRACTION="${ONE_SHOT_MAX_DARK_FRACTION:-0.98}"
+ONE_SHOT_WARMUP_STEPS="${ONE_SHOT_WARMUP_STEPS:-100}"
 HISTORY_FRAMES="${HISTORY_FRAMES:-4}"
 CONTEXT_POOL_MULTIPLIER="${CONTEXT_POOL_MULTIPLIER:-2.0}"
 MAX_EPISODE_FRAMES="${MAX_EPISODE_FRAMES:-500}"
 BASE_SEED="${BASE_SEED:-42}"
-TRAIN_ACTIVATION_CHECKPOINTING="${TRAIN_ACTIVATION_CHECKPOINTING:-1}"
+TRAIN_ACTIVATION_CHECKPOINTING="${TRAIN_ACTIVATION_CHECKPOINTING:-0}"
 PREPARE_ONLY="${PREPARE_ONLY:-0}"
 FRESH="${FRESH:-0}"
 
@@ -76,12 +103,17 @@ Common options:
                       Existing selected action-visible replay root. If absent,
                       it is built at PREPARED_ROOT/action_visible_real.
   --real-data-link-mode hardlink|copy|symlink (use copy before migration).
+  --allow-missing-latent-segments N
+                      Tolerate known upstream latent gaps while building and
+                      verifying the action-visible replay set (default: 19).
   --output-root PATH  Run directory. Defaults to a timestamped train_out path.
-  --gpu-ids IDS       Comma-separated GPU IDs (default: 0,1,2,3).
+  --gpu-ids IDS       Comma-separated GPU IDs (default: 0,1,2,3,4,5,6,7).
   --fresh             Delete OUTPUT_ROOT before starting. Never implied.
   --prepare-only      Build Action Critic and Stage-2 contexts, then exit.
   --buffer-capacity N --q-per-round N --candidates-per-q N
-  --train-global-batch N --real-fraction X --max-updates N
+  --one-shot --one-shot-target N --one-shot-train-epochs N
+  --train-global-batch N --gradient-accumulation-steps N
+  --real-fraction X --max-updates N
   --model-save-every-updates N
   --swanlab-project NAME --swanlab-group NAME --swanlab-name NAME
   --swanlab-api-key-file PATH
@@ -117,6 +149,7 @@ while [[ $# -gt 0 ]]; do
     --vlac-batch-size-per-gpu) require_value "$@"; VLAC_BATCH_SIZE_PER_GPU="$2"; shift 2 ;;
     --train-batch-size-per-gpu) require_value "$@"; TRAIN_BATCH_SIZE_PER_GPU="$2"; shift 2 ;;
     --train-global-batch) require_value "$@"; TRAIN_GLOBAL_BATCH="$2"; shift 2 ;;
+    --gradient-accumulation-steps) require_value "$@"; GRADIENT_ACCUMULATION_STEPS="$2"; shift 2 ;;
     --pseudo-epochs-per-update) require_value "$@"; PSEUDO_EPOCHS_PER_UPDATE="$2"; shift 2 ;;
     --real-fraction) require_value "$@"; REAL_FRACTION="$2"; shift 2 ;;
     --max-updates) require_value "$@"; MAX_UPDATES="$2"; shift 2 ;;
@@ -124,8 +157,13 @@ while [[ $# -gt 0 ]]; do
     --min-action-score) require_value "$@"; MIN_ACTION_SCORE="$2"; shift 2 ;;
     --min-process-score) require_value "$@"; MIN_PROCESS_SCORE="$2"; shift 2 ;;
     --max-pseudo-per-context) require_value "$@"; MAX_PSEUDO_PER_CONTEXT="$2"; shift 2 ;;
+    --one-shot) ONE_SHOT_MODE=1; shift ;;
+    --one-shot-target) require_value "$@"; ONE_SHOT_TARGET="$2"; shift 2 ;;
+    --one-shot-train-epochs) require_value "$@"; ONE_SHOT_TRAIN_EPOCHS="$2"; shift 2 ;;
+    --one-shot-max-per-episode) require_value "$@"; ONE_SHOT_MAX_PER_EPISODE="$2"; shift 2 ;;
     --expected-per-domain-total) require_value "$@"; EXPECTED_PER_DOMAIN_TOTAL="$2"; shift 2 ;;
     --expected-stage1-per-domain) require_value "$@"; EXPECTED_STAGE1_PER_DOMAIN="$2"; shift 2 ;;
+    --allow-missing-latent-segments) require_value "$@"; ALLOW_MISSING_LATENT_SEGMENTS="$2"; shift 2 ;;
     --history-frames) require_value "$@"; HISTORY_FRAMES="$2"; shift 2 ;;
     --context-pool-multiplier) require_value "$@"; CONTEXT_POOL_MULTIPLIER="$2"; shift 2 ;;
     --max-episode-frames) require_value "$@"; MAX_EPISODE_FRAMES="$2"; shift 2 ;;
@@ -211,11 +249,13 @@ if [[ "$REAL_DATA_MODE" == "stage1-stage2-visible" ]]; then
       --prepared-root "$PREPARED_DATA_ROOT" \
       --output-root "$REAL_DATA_ROOT" \
       --link-mode "$REAL_DATA_LINK_MODE" \
+      --allow-missing-latent-segments "$ALLOW_MISSING_LATENT_SEGMENTS" \
       "${source_args[@]}"
   fi
   "$PYTHON" -m robotwin_critic.two_stage_rft.prepare_action_visible_real \
     --prepared-root "$PREPARED_DATA_ROOT" \
     --output-root "$REAL_DATA_ROOT" \
+    --allow-missing-latent-segments "$ALLOW_MISSING_LATENT_SEGMENTS" \
     --verify-only
 fi
 
@@ -261,6 +301,7 @@ fi
 
 ONLINE_ROOT="${ONLINE_ROOT:-$OUTPUT_ROOT/online}"
 ONLINE_ROOT="$(realpath -m "$ONLINE_ROOT")"
+MULTINODE_QUEUE_ROOT="${MULTINODE_QUEUE_ROOT:-$ONLINE_ROOT/multinode_queue}"
 mkdir -p "$ONLINE_ROOT"
 if [[ -s "$WAM_MODEL/vae/config.json" && -s "$WAM_MODEL/transformer/config.json" ]]; then
   INITIAL_MODEL="$WAM_MODEL"
@@ -290,17 +331,28 @@ if [[ -z "${SWANLAB_API_KEY:-}" ]]; then
 fi
 
 export PROJECT_ROOT LINGBOT_ROOT PREPARED_DATA_ROOT PART2_ROOT ONLINE_ROOT
+export PYTHON WAM_PYTHON VLAC_PYTHON
 export REAL_DATA_ROOT REAL_DATA_MODE
 export WAM_MODEL BASE_MODEL INITIAL_MODEL VLAC_MODEL
 export CONTEXTS ACTION_PROFILE
+export PSEUDO_BUDGET="$BUDGET"
 export SPLIT_MANIFEST="$PREPARED_DATA_ROOT/split_manifest.json"
 export INFER_GPU_IDS="$GPU_IDS"
 export INFER_BATCH_SIZE_PER_GPU="$INFERENCE_BATCH_SIZE_PER_GPU"
+export REMOTE_INFER_WORKERS REMOTE_GPU_IDS MULTINODE_QUEUE_ROOT
+export TRAIN_NNODES TRAIN_LOCAL_NGPU TRAIN_MASTER_ADDR TRAIN_MASTER_PORT TRAIN_LAUNCHER
+export NCCL_IB_DISABLE NCCL_NET NCCL_SOCKET_IFNAME NCCL_SOCKET_FAMILY NCCL_CUMEM_HOST_ENABLE
 export Q_PER_ROUND INFER_BATCH_SIZE_PER_GPU CANDIDATES_PER_Q VLAC_BATCH_SIZE_PER_GPU
-export BUFFER_CAPACITY TRAIN_BATCH_SIZE_PER_GPU TRAIN_GLOBAL_BATCH
+export BUFFER_CAPACITY TRAIN_BATCH_SIZE_PER_GPU TRAIN_GLOBAL_BATCH GRADIENT_ACCUMULATION_STEPS
 export PSEUDO_EPOCHS_PER_UPDATE REAL_FRACTION MAX_UPDATES MODEL_SAVE_EVERY_UPDATES
 export MIN_ACTION_SCORE MIN_PROCESS_SCORE MAX_PSEUDO_PER_CONTEXT
+export ONE_SHOT_MODE ONE_SHOT_TARGET ONE_SHOT_TRAIN_EPOCHS
+export ONE_SHOT_DATA_FRACTION ONE_SHOT_COLLECT_ROOT
+export ONE_SHOT_MAX_PER_EPISODE ONE_SHOT_PROGRESS_BINS ONE_SHOT_MIN_ACTION_DISTANCE
+export ONE_SHOT_MIN_MEAN_LUMA ONE_SHOT_MIN_STD_LUMA ONE_SHOT_MAX_DARK_FRACTION
+export ONE_SHOT_WARMUP_STEPS
 export EXPECTED_PER_DOMAIN_TOTAL EXPECTED_STAGE1_PER_DOMAIN
+export ALLOW_MISSING_LATENT_SEGMENTS
 export HISTORY_FRAMES CONTEXT_POOL_MULTIPLIER MAX_EPISODE_FRAMES BASE_SEED
 export TRAIN_ACTIVATION_CHECKPOINTING
 export ACTION_GATE_POLICY=score_with_safety_gates

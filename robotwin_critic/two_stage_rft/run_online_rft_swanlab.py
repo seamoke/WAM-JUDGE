@@ -20,6 +20,7 @@ from robotwin_critic.two_stage_rft.log_online_collection_swanlab import (
 
 COLLECTION_EVENT = "SWANLAB_COLLECTION_EVENT "
 METRIC_EVENT = "SWANLAB_METRIC_EVENT "
+ONE_SHOT_BUFFER_EVENT = "ONE_SHOT_BUFFER_EVENT "
 TORCHRUN_PREFIX = re.compile(r"^\[[^\]]+\]:")
 UPDATE_OK = re.compile(r"ONLINE_UPDATE_OK index=(\d+)")
 UPDATE_START = re.compile(r"ONLINE_UPDATE_START index=(\d+)")
@@ -44,10 +45,13 @@ RUNTIME_CONFIG_ENV = {
     "data.real_data_mode": "REAL_DATA_MODE",
     "data.expected_per_domain_total": "EXPECTED_PER_DOMAIN_TOTAL",
     "data.expected_stage1_per_domain": "EXPECTED_STAGE1_PER_DOMAIN",
+    "data.allow_missing_latent_segments": "ALLOW_MISSING_LATENT_SEGMENTS",
     "data.history_frames": "HISTORY_FRAMES",
     "data.context_pool_multiplier": "CONTEXT_POOL_MULTIPLIER",
     "data.max_episode_frames": "MAX_EPISODE_FRAMES",
     "sampling.gpu_ids": "INFER_GPU_IDS",
+    "sampling.remote_workers": "REMOTE_INFER_WORKERS",
+    "sampling.remote_gpu_ids": "REMOTE_GPU_IDS",
     "sampling.q_per_round": "Q_PER_ROUND",
     "sampling.batch_size_per_gpu": "INFER_BATCH_SIZE_PER_GPU",
     "sampling.candidates_per_q": "CANDIDATES_PER_Q",
@@ -62,15 +66,36 @@ RUNTIME_CONFIG_ENV = {
     "replay.real_fraction": "REAL_FRACTION",
     "training.batch_size_per_gpu": "TRAIN_BATCH_SIZE_PER_GPU",
     "training.global_batch_size": "TRAIN_GLOBAL_BATCH",
+    "training.gradient_accumulation_steps": "GRADIENT_ACCUMULATION_STEPS",
+    "training.nnodes": "TRAIN_NNODES",
+    "training.local_gpus_per_node": "TRAIN_LOCAL_NGPU",
+    "training.master_addr": "TRAIN_MASTER_ADDR",
+    "training.nccl_ib_disable": "NCCL_IB_DISABLE",
+    "training.nccl_net": "NCCL_NET",
+    "training.nccl_socket_ifname": "NCCL_SOCKET_IFNAME",
+    "training.nccl_socket_family": "NCCL_SOCKET_FAMILY",
+    "training.nccl_cumem_host_enable": "NCCL_CUMEM_HOST_ENABLE",
     "training.activation_checkpointing": "TRAIN_ACTIVATION_CHECKPOINTING",
     "training.pseudo_epochs_per_update": "PSEUDO_EPOCHS_PER_UPDATE",
     "training.update_steps_override": "UPDATE_STEPS",
     "training.max_updates": "MAX_UPDATES",
     "training.model_save_every_updates": "MODEL_SAVE_EVERY_UPDATES",
+    "one_shot.enabled": "ONE_SHOT_MODE",
+    "one_shot.target": "ONE_SHOT_TARGET",
+    "one_shot.data_fraction": "ONE_SHOT_DATA_FRACTION",
+    "one_shot.collect_root": "ONE_SHOT_COLLECT_ROOT",
+    "one_shot.epochs": "ONE_SHOT_TRAIN_EPOCHS",
+    "one_shot.max_per_episode": "ONE_SHOT_MAX_PER_EPISODE",
+    "one_shot.progress_bins": "ONE_SHOT_PROGRESS_BINS",
+    "one_shot.min_action_distance": "ONE_SHOT_MIN_ACTION_DISTANCE",
+    "one_shot.min_mean_luma": "ONE_SHOT_MIN_MEAN_LUMA",
+    "one_shot.min_std_luma": "ONE_SHOT_MIN_STD_LUMA",
+    "one_shot.max_dark_fraction": "ONE_SHOT_MAX_DARK_FRACTION",
 }
 
 INTEGER_ENV = {
     "Q_PER_ROUND",
+    "REMOTE_INFER_WORKERS",
     "INFER_BATCH_SIZE_PER_GPU",
     "CANDIDATES_PER_Q",
     "BASE_SEED",
@@ -79,6 +104,9 @@ INTEGER_ENV = {
     "BUFFER_CAPACITY",
     "TRAIN_BATCH_SIZE_PER_GPU",
     "TRAIN_GLOBAL_BATCH",
+    "GRADIENT_ACCUMULATION_STEPS",
+    "TRAIN_NNODES",
+    "TRAIN_LOCAL_NGPU",
     "TRAIN_ACTIVATION_CHECKPOINTING",
     "PSEUDO_EPOCHS_PER_UPDATE",
     "UPDATE_STEPS",
@@ -86,15 +114,26 @@ INTEGER_ENV = {
     "MODEL_SAVE_EVERY_UPDATES",
     "EXPECTED_PER_DOMAIN_TOTAL",
     "EXPECTED_STAGE1_PER_DOMAIN",
+    "ALLOW_MISSING_LATENT_SEGMENTS",
     "HISTORY_FRAMES",
     "MAX_EPISODE_FRAMES",
+    "ONE_SHOT_MODE",
+    "ONE_SHOT_TARGET",
+    "ONE_SHOT_TRAIN_EPOCHS",
+    "ONE_SHOT_MAX_PER_EPISODE",
+    "ONE_SHOT_PROGRESS_BINS",
 }
 
 FLOAT_ENV = {
     "MIN_ACTION_SCORE",
     "MIN_PROCESS_SCORE",
     "REAL_FRACTION",
+    "ONE_SHOT_DATA_FRACTION",
     "CONTEXT_POOL_MULTIPLIER",
+    "ONE_SHOT_MIN_ACTION_DISTANCE",
+    "ONE_SHOT_MIN_MEAN_LUMA",
+    "ONE_SHOT_MIN_STD_LUMA",
+    "ONE_SHOT_MAX_DARK_FRACTION",
 }
 
 
@@ -129,23 +168,39 @@ def build_runtime_config(online_root: Path, run_id: str) -> dict[str, Any]:
         for value in str(config.get("sampling.gpu_ids", "")).split(",")
         if value.strip()
     ]
-    if gpu_ids:
-        config["sampling.num_gpus"] = len(gpu_ids)
+    remote_workers = config.get("sampling.remote_workers", 0)
+    if not isinstance(remote_workers, int):
+        remote_workers = 0
+    total_sampling_workers = len(gpu_ids) + remote_workers
+    config["sampling.local_num_gpus"] = len(gpu_ids)
+    config["sampling.num_gpus"] = total_sampling_workers
     q_per_round = config.get("sampling.q_per_round")
-    if gpu_ids and isinstance(q_per_round, int) and q_per_round % len(gpu_ids) == 0:
-        config["sampling.q_per_gpu"] = q_per_round // len(gpu_ids)
+    if (
+        total_sampling_workers > 0
+        and isinstance(q_per_round, int)
+        and q_per_round % total_sampling_workers == 0
+    ):
+        config["sampling.q_per_gpu"] = q_per_round // total_sampling_workers
 
     per_gpu = config.get("training.batch_size_per_gpu")
     global_batch = config.get("training.global_batch_size")
+    nnodes = config.get("training.nnodes", 1)
+    local_gpus = config.get("training.local_gpus_per_node", len(gpu_ids))
+    training_world_size = (
+        nnodes * local_gpus
+        if isinstance(nnodes, int) and isinstance(local_gpus, int)
+        else len(gpu_ids)
+    )
+    config["training.world_size"] = training_world_size
     if (
-        gpu_ids
+        training_world_size > 0
         and isinstance(per_gpu, int)
         and isinstance(global_batch, int)
         and per_gpu > 0
-        and global_batch % (per_gpu * len(gpu_ids)) == 0
+        and global_batch % (per_gpu * training_world_size) == 0
     ):
         config["training.gradient_accumulation_steps"] = global_batch // (
-            per_gpu * len(gpu_ids)
+            per_gpu * training_world_size
         )
 
     capacity = config.get("replay.buffer_capacity")
@@ -375,6 +430,17 @@ def main() -> None:
         )
         assert process.stdout is not None
         for line in process.stdout:
+            if line.startswith(ONE_SHOT_BUFFER_EVENT):
+                payload = json.loads(line[len(ONE_SHOT_BUFFER_EVENT) :])
+                swanlab.log(
+                    {
+                        f"one_shot_buffer/{key}": float(value)
+                        for key, value in payload.items()
+                        if isinstance(value, (int, float, bool))
+                    },
+                    step=int(payload.get("collect_index", 0)),
+                )
+                continue
             if line.startswith(COLLECTION_EVENT):
                 payload = json.loads(line[len(COLLECTION_EVENT) :])
                 collect_index = int(payload["collect_index"])

@@ -10,9 +10,12 @@ from pathlib import Path
 import torch
 
 from robotwin_critic.two_stage_rft.action_only_dataset import (
+    AllTransitionChunkDataset,
+    DeterministicFractionDataset,
     FirstTransitionChunkDataset,
     GeneratedChunkDataset,
     RatioMixedDataset,
+    UnionRFTDataset,
     mixed_pad_latent_batch_collate,
 )
 from robotwin_critic.two_stage_rft.log_online_collection_swanlab import (
@@ -209,6 +212,25 @@ def main() -> None:
     )
     parser.add_argument("--real-fraction", type=float, default=0.7)
     parser.add_argument(
+        "--real-data-fraction",
+        type=float,
+        default=1.0,
+        help="Deterministic fraction of real chunks used by this run.",
+    )
+    parser.add_argument("--data-fraction-seed", type=int, default=42)
+    parser.add_argument(
+        "--mixing-mode",
+        choices=("ratio", "union"),
+        default="ratio",
+        help="Ratio sampling for iterative RFT, or each real+pseudo item once/epoch.",
+    )
+    parser.add_argument(
+        "--num-epochs",
+        type=int,
+        default=0,
+        help="When positive, derive optimizer steps from exactly this many epochs.",
+    )
+    parser.add_argument(
         "--real-data-mode",
         choices=("stage1", "stage1-stage2", "stage1-stage2-visible"),
         default="stage1-stage2-visible",
@@ -219,11 +241,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--real-chunk-mode",
-        choices=("full", "first-transition"),
+        choices=("full", "first-transition", "all-transitions"),
         default="full",
         help=(
             "Use full official real segments, or crop every real sample to the "
-            "same F=2 transition used by online pseudo chunks."
+            "same F=2 transition used by online pseudo chunks, or expose every "
+            "adjacent F=2 transition from every selected real segment."
         ),
     )
     parser.add_argument("--save-root")
@@ -247,6 +270,7 @@ def main() -> None:
             original_swanlab_functions = None
             external_swanlab_sink = None
             external_swanlab_run = None
+            dataset_report = {}
 
             def mixed_factory(config, num_init_worker):
                 if args.real_data_mode == "stage1-stage2":
@@ -268,17 +292,37 @@ def main() -> None:
                         real,
                         frame_chunk_size=int(config.frame_chunk_size),
                     )
+                elif args.real_chunk_mode == "all-transitions":
+                    real = AllTransitionChunkDataset(
+                        real,
+                        frame_chunk_size=int(config.frame_chunk_size),
+                    )
+                full_real_items = len(real)
+                if args.real_data_fraction != 1.0:
+                    real = DeterministicFractionDataset(
+                        real,
+                        fraction=args.real_data_fraction,
+                        seed=args.data_fraction_seed,
+                    )
                 pseudo = GeneratedChunkDataset(
                     args.pseudo_jsonl,
                     config,
                     expected_split_sha256=sha256_file(args.split_manifest),
                     expected_selection_mode=args.expected_selection_mode,
                 )
-                return RatioMixedDataset(
-                    real,
-                    pseudo,
-                    real_fraction=args.real_fraction,
+                dataset_report.update(
+                    {
+                        "real_items": len(real),
+                        "full_real_items": full_real_items,
+                        "real_data_fraction": args.real_data_fraction,
+                        "data_fraction_seed": args.data_fraction_seed,
+                        "pseudo_items": len(pseudo),
+                        "union_items": len(real) + len(pseudo),
+                    }
                 )
+                if args.mixing_mode == "union":
+                    return UnionRFTDataset(real, pseudo)
+                return RatioMixedDataset(real, pseudo, real_fraction=args.real_fraction)
 
             def mixed_collate(batch):
                 return mixed_pad_latent_batch_collate(batch, original_collate)
@@ -334,9 +378,57 @@ def main() -> None:
             self.rft_source_counts = torch.zeros(
                 2, dtype=torch.long, device=self.device
             )
+            if args.num_epochs < 0:
+                raise ValueError("num_epochs must be non-negative")
+            if args.num_epochs:
+                if args.mixing_mode != "union":
+                    raise ValueError("Exact epoch training requires --mixing-mode union")
+                microbatches = len(self.train_loader) * args.num_epochs
+                accumulation = int(self.gradient_accumulation_steps)
+                if microbatches % accumulation:
+                    raise ValueError(
+                        "Exact epochs require epoch microbatches*num_epochs to be "
+                        "divisible by gradient accumulation"
+                    )
+                self.config.num_steps = microbatches // accumulation
+                self.config.save_steps = [self.config.num_steps]
+                self.config.save_interval = self.config.num_steps
+            expected_real_fraction = (
+                dataset_report["real_items"] / dataset_report["union_items"]
+                if args.mixing_mode == "union"
+                else args.real_fraction
+            )
+            self.expected_real_fraction = expected_real_fraction
+            self.dataset_report = {
+                **dataset_report,
+                "mixing_mode": args.mixing_mode,
+                "num_epochs": args.num_epochs,
+                "steps_per_epoch": (
+                    len(self.train_loader) // int(self.gradient_accumulation_steps)
+                    if args.num_epochs
+                    else 0
+                ),
+                "optimizer_steps": int(self.config.num_steps),
+                "expected_real_fraction": expected_real_fraction,
+                "expected_pseudo_fraction": 1.0 - expected_real_fraction,
+            }
+            if self.config.rank == 0:
+                report_path = Path(self.config.save_root) / "rft_dataset_report.json"
+                report_path.parent.mkdir(parents=True, exist_ok=True)
+                report_path.write_text(
+                    json.dumps(self.dataset_report, indent=2) + "\n",
+                    encoding="utf-8",
+                )
             self.defer_swanlab_finish = True
             self.buffer_metrics = summarize_pseudo_buffer(args.pseudo_jsonl)
             self.buffer_metrics["rft/outer_step"] = float(args.outer_step)
+            self.buffer_metrics.update(
+                {
+                    f"rft_dataset/{key}": float(value)
+                    for key, value in self.dataset_report.items()
+                    if isinstance(value, (int, float))
+                }
+            )
             if self.config.rank == 0 and self.swanlab_run is not None:
                 original_log = self._swanlab.log
 
@@ -357,11 +449,17 @@ def main() -> None:
                 optimizer_report["optimizer_parameters"],
             )
             logger.info(
-                "RFT data: real_chunk_mode=%s batch_size_per_rank=%d "
+                "RFT data: real_chunk_mode=%s mixing_mode=%s epochs=%d "
+                "real_items=%d pseudo_items=%d steps=%d batch_size_per_rank=%d "
                 "real_fraction=%.3f",
                 args.real_chunk_mode,
+                args.mixing_mode,
+                args.num_epochs,
+                dataset_report["real_items"],
+                dataset_report["pseudo_items"],
+                int(self.config.num_steps),
                 int(config.batch_size),
-                args.real_fraction,
+                expected_real_fraction,
             )
 
         def _train_step(self, batch, batch_idx):
@@ -408,6 +506,10 @@ def main() -> None:
                     )
                     / (1024**3),
                 }
+                if self.dataset_report["steps_per_epoch"]:
+                    metrics["rft/epoch_progress"] = (
+                        float(self.step) / self.dataset_report["steps_per_epoch"]
+                    )
                 if source_metrics is not None:
                     metrics.update(source_metrics)
                 self._swanlab.log(metrics, step=self.step)
@@ -422,7 +524,7 @@ def main() -> None:
             try:
                 super().train()
                 source_counts = write_source_counts(
-                    self, self.rft_source_counts, args.real_fraction
+                    self, self.rft_source_counts, self.expected_real_fraction
                 )
                 if self.config.rank == 0:
                     logger.info(
