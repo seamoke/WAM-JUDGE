@@ -93,7 +93,9 @@ VLAC_BATCH_SIZE_PER_GPU=4
 TRAIN_BATCH_SIZE_PER_GPU=32
 TRAIN_GLOBAL_BATCH=128       # four GPUs
 GRADIENT_ACCUMULATION_STEPS=1
-ONE_SHOT_TRAIN_EPOCHS=3
+ONE_SHOT_TRAIN_EPOCHS=5
+ONE_SHOT_PLATEAU_MIN_DELTA=50
+ONE_SHOT_PLATEAU_PATIENCE=10
 MIN_ACTION_SCORE=0.75
 MIN_PROCESS_SCORE=5.0
 MAX_PSEUDO_PER_CONTEXT=4
@@ -122,12 +124,19 @@ online/one_shot_train/train.log
 online/one_shot_train/checkpoints/checkpoint_step_*/
 online/final_model/
 online/one_shot_complete.json
+online/one_shot_plateau_state.json
 ```
 
 `ONE_SHOT_DATA_FRACTION` defaults to `1.0`. At completion, the trained
 transformer is copied into `online/final_model/transformer/`; it is not a
 symlink to the training checkpoint. The original checkpoint is retained as a
 second recoverable copy.
+
+Collection also stops when 10 newly completed collection rounds in a row add
+fewer than 50 selected pseudo chunks each. The persisted baseline and counter
+live in `online/one_shot_plateau_state.json`, so existing collection artifacts
+are reused across restarts. The first run after upgrading records the current
+selected count as a baseline and does not count old rounds as plateau rounds.
 
 `state.json` makes collection resumable. Do not delete completed `collect_*`
 directories when resuming. SwanLab receives collection metrics, critic score
@@ -144,7 +153,7 @@ For a full run, `rft_dataset_report.json` should contain:
   "real_items": 60219,
   "pseudo_items": 25000,
   "union_items": 85219,
-  "num_epochs": 3
+  "num_epochs": 5
 }
 ```
 
