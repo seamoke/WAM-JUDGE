@@ -14,6 +14,7 @@ from PIL import Image
 
 from robotwin_critic.two_stage_rft.data_access import CAMERAS
 from robotwin_critic.two_stage_rft.protocol import sha256_file
+from robotwin_critic.two_stage_rft.rollout_provenance import with_rollout_provenance
 from robotwin_critic.vlac_finetune.common import (
     VideoDecodeError,
     VideoFrameReader,
@@ -304,7 +305,7 @@ def main() -> None:
                                 ].detach().cpu(),
                                 text_emb_path,
                             )
-                            record = {
+                            record = with_rollout_provenance({
                                 **context,
                                 "candidate_id": candidate_id,
                                 "candidate_index": candidate_index,
@@ -337,7 +338,7 @@ def main() -> None:
                                         "remain in the context record."
                                     ),
                                 },
-                            }
+                            })
                             output_handle.write(
                                 json.dumps(record, ensure_ascii=False) + "\n"
                             )

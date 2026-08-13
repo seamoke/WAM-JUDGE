@@ -9,6 +9,8 @@ import os
 from collections import Counter, defaultdict, deque
 from pathlib import Path
 
+from robotwin_critic.two_stage_rft.rollout_provenance import with_rollout_provenance
+
 
 def read_jsonl(path: Path) -> list[dict]:
     if not path.is_file():
@@ -156,7 +158,8 @@ def finalize_buffer(
     quotas = proportional_quotas(group_weights, target)
     cache = load_visual_cache(visual_cache_path)
     deduplicated = {}
-    for row in rows:
+    for raw_row in rows:
+        row = with_rollout_provenance(raw_row)
         deduplicated[str(row["candidate_id"])] = row
 
     visual_rejected = 0
@@ -358,6 +361,8 @@ def finalize_buffer(
     ]
     selected_groups = Counter(group_key(row) for row in selected)
     selected_progress = Counter(progress_bin(row, progress_bins) for row in selected)
+    selected_tasks = Counter(str(row["source_task"]) for row in selected)
+    selected_stages = Counter(str(row["source_stage"]) for row in selected)
     quota_overfill = {
         group: selected_groups[group] - quota
         for group, quota in quotas.items()
@@ -381,6 +386,8 @@ def finalize_buffer(
         ),
         "group_quotas": quotas,
         "selected_by_group": dict(sorted(selected_groups.items())),
+        "selected_by_task": dict(sorted(selected_tasks.items())),
+        "selected_by_source_stage": dict(sorted(selected_stages.items())),
         "selected_by_progress_bin": {
             str(key): value for key, value in sorted(selected_progress.items())
         },

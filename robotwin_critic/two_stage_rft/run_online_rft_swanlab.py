@@ -85,6 +85,8 @@ RUNTIME_CONFIG_ENV = {
     "one_shot.data_fraction": "ONE_SHOT_DATA_FRACTION",
     "one_shot.collect_root": "ONE_SHOT_COLLECT_ROOT",
     "one_shot.epochs": "ONE_SHOT_TRAIN_EPOCHS",
+    "one_shot.plateau_min_delta": "ONE_SHOT_PLATEAU_MIN_DELTA",
+    "one_shot.plateau_patience": "ONE_SHOT_PLATEAU_PATIENCE",
     "one_shot.max_per_episode": "ONE_SHOT_MAX_PER_EPISODE",
     "one_shot.progress_bins": "ONE_SHOT_PROGRESS_BINS",
     "one_shot.min_action_distance": "ONE_SHOT_MIN_ACTION_DISTANCE",
@@ -120,6 +122,8 @@ INTEGER_ENV = {
     "ONE_SHOT_MODE",
     "ONE_SHOT_TARGET",
     "ONE_SHOT_TRAIN_EPOCHS",
+    "ONE_SHOT_PLATEAU_MIN_DELTA",
+    "ONE_SHOT_PLATEAU_PATIENCE",
     "ONE_SHOT_MAX_PER_EPISODE",
     "ONE_SHOT_PROGRESS_BINS",
 }

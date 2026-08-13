@@ -173,8 +173,10 @@ def build_contexts(
                         f"{ref.source_episode_index}/{frame}"
                     ),
                     "task": ref.task,
+                    "source_task": ref.task,
                     "domain": ref.domain,
                     "stage": "stage2_video_only",
+                    "source_stage": "stage2",
                     "source_episode_index": ref.source_episode_index,
                     "output_episode_index": ref.output_episode_index,
                     "length": length,

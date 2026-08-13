@@ -45,7 +45,9 @@ ONE_SHOT_MODE="${ONE_SHOT_MODE:-0}"
 ONE_SHOT_TARGET="${ONE_SHOT_TARGET:-25000}"
 ONE_SHOT_DATA_FRACTION="${ONE_SHOT_DATA_FRACTION:-1.0}"
 ONE_SHOT_COLLECT_ROOT="${ONE_SHOT_COLLECT_ROOT:-$ONLINE_ROOT/collect}"
-ONE_SHOT_TRAIN_EPOCHS="${ONE_SHOT_TRAIN_EPOCHS:-3}"
+ONE_SHOT_TRAIN_EPOCHS="${ONE_SHOT_TRAIN_EPOCHS:-5}"
+ONE_SHOT_PLATEAU_MIN_DELTA="${ONE_SHOT_PLATEAU_MIN_DELTA:-50}"
+ONE_SHOT_PLATEAU_PATIENCE="${ONE_SHOT_PLATEAU_PATIENCE:-10}"
 ONE_SHOT_MAX_PER_EPISODE="${ONE_SHOT_MAX_PER_EPISODE:-16}"
 ONE_SHOT_PROGRESS_BINS="${ONE_SHOT_PROGRESS_BINS:-5}"
 ONE_SHOT_MIN_ACTION_DISTANCE="${ONE_SHOT_MIN_ACTION_DISTANCE:-0.03}"
@@ -79,6 +81,7 @@ ONE_SHOT_BUFFER="$ONLINE_ROOT/one_shot_pseudo_buffer.jsonl"
 ONE_SHOT_SUMMARY="$ONLINE_ROOT/one_shot_pseudo_buffer.summary.json"
 ONE_SHOT_VISUAL_CACHE="$ONLINE_ROOT/one_shot_visual_cache.jsonl"
 ONE_SHOT_COMPLETE="$ONLINE_ROOT/one_shot_complete.json"
+ONE_SHOT_PLATEAU_STATE="$ONLINE_ROOT/one_shot_plateau_state.json"
 ONE_SHOT_EFFECTIVE_TARGET="$($WAM_PYTHON -c 'import math,sys; f=float(sys.argv[1]); n=int(sys.argv[2]); assert 0 < f <= 1; print(max(1, math.floor(n*f+0.5)))' "$ONE_SHOT_DATA_FRACTION" "$ONE_SHOT_TARGET")"
 
 IFS=',' read -r -a GPUS <<< "$INFER_GPU_IDS"
@@ -395,7 +398,7 @@ run_one_shot_training() {
   LINGBOT_SWANLAB_GROUP="${LINGBOT_SWANLAB_GROUP:-robotwin-stage1-real-stage2-pseudo}" \
   LINGBOT_SWANLAB_PROJECT="${LINGBOT_SWANLAB_PROJECT:-lingbot-va-robotwin}" \
   SWANLAB_EXPERIMENT_NAME="${SWANLAB_EXPERIMENT_NAME:-robotwin-stage2-one-shot-dual-rft}" \
-  RUN_ID="one_shot_fraction_${ONE_SHOT_DATA_FRACTION}_3epochs" \
+  RUN_ID="one_shot_fraction_${ONE_SHOT_DATA_FRACTION}_${ONE_SHOT_TRAIN_EPOCHS}epochs" \
   OUT="$train_root" \
   CUDA_VISIBLE_DEVICES="$INFER_GPU_IDS" \
   bash "$TRAIN_LAUNCHER"; then
@@ -430,9 +433,25 @@ refresh_one_shot_buffer() {
     --max-dark-fraction "$ONE_SHOT_MAX_DARK_FRACTION"
 }
 
+update_one_shot_plateau() {
+  local collect_index="$1" selected
+  selected="$($WAM_PYTHON -c 'import json,sys; print(int(json.load(open(sys.argv[1]))["selected"]))' "$ONE_SHOT_SUMMARY")"
+  "$WAM_PYTHON" -m robotwin_critic.two_stage_rft.one_shot_plateau \
+    --state "$ONE_SHOT_PLATEAU_STATE" \
+    --collect-index "$collect_index" \
+    --selected "$selected" \
+    --min-delta "$ONE_SHOT_PLATEAU_MIN_DELTA" \
+    --patience "$ONE_SHOT_PLATEAU_PATIENCE" >/dev/null
+}
+
+one_shot_should_train() {
+  "$WAM_PYTHON" -c 'import json,sys; summary=json.load(open(sys.argv[1])); plateau=json.load(open(sys.argv[2])) if __import__("pathlib").Path(sys.argv[2]).is_file() else {}; print(int(bool(summary["ready"] or (summary["selected"] > 0 and plateau.get("stopped", False)))))' \
+    "$ONE_SHOT_SUMMARY" "$ONE_SHOT_PLATEAU_STATE"
+}
+
 if [[ "$ONE_SHOT_MODE" == "1" && -d "$ONE_SHOT_COLLECT_ROOT" ]]; then
   refresh_one_shot_buffer
-  one_shot_ready="$($WAM_PYTHON -c 'import json,sys; print(int(json.load(open(sys.argv[1]))["ready"]))' "$ONE_SHOT_SUMMARY")"
+  one_shot_ready="$(one_shot_should_train)"
   if [[ "$one_shot_ready" == "1" ]]; then
     run_one_shot_training
     exit 0
@@ -574,9 +593,13 @@ while true; do
   echo "ONLINE_COLLECT_OK index=$collect_index"
   if [[ "$ONE_SHOT_MODE" == "1" ]]; then
     refresh_one_shot_buffer
-    "$WAM_PYTHON" -c 'import json,sys; d=json.load(open(sys.argv[1])); print("ONE_SHOT_BUFFER_EVENT "+json.dumps({"collect_index": int(sys.argv[2]), "selected": d["selected"], "target": d["target"], "ready": d["ready"], "unique_contexts": d["unique_contexts"], "unique_episodes": d["unique_episodes"], "visual_rejected": d["visual_rejected"], "action_duplicate_rejected": d["action_duplicate_rejected"], "groups_with_quota_shortfall": len(d["quota_shortfalls_before_backfill"]), "groups_overfilled": len(d["quota_overfill_after_backfill"])}))' "$ONE_SHOT_SUMMARY" "$collect_index"
-    one_shot_ready="$($WAM_PYTHON -c 'import json,sys; print(int(json.load(open(sys.argv[1]))["ready"]))' "$ONE_SHOT_SUMMARY")"
+    update_one_shot_plateau "$collect_index"
+    "$WAM_PYTHON" -c 'import json,sys; d=json.load(open(sys.argv[1])); p=json.load(open(sys.argv[3])); print("ONE_SHOT_BUFFER_EVENT "+json.dumps({"collect_index": int(sys.argv[2]), "selected": d["selected"], "target": d["target"], "ready": d["ready"], "unique_contexts": d["unique_contexts"], "unique_episodes": d["unique_episodes"], "visual_rejected": d["visual_rejected"], "action_duplicate_rejected": d["action_duplicate_rejected"], "groups_with_quota_shortfall": len(d["quota_shortfalls_before_backfill"]), "groups_overfilled": len(d["quota_overfill_after_backfill"]), "selected_delta": p.get("selected_delta"), "plateau_rounds": p["consecutive_low_growth"], "plateau_stopped": p["stopped"]}))' "$ONE_SHOT_SUMMARY" "$collect_index" "$ONE_SHOT_PLATEAU_STATE"
+    one_shot_ready="$(one_shot_should_train)"
     if [[ "$one_shot_ready" == "1" ]]; then
+      if [[ -s "$ONE_SHOT_PLATEAU_STATE" ]]; then
+        "$WAM_PYTHON" -c 'import json,sys; p=json.load(open(sys.argv[1])); print("ONE_SHOT_PLATEAU_STOP selected_delta={} rounds={} stopped={}".format(p.get("selected_delta"), p["consecutive_low_growth"], p["stopped"]))' "$ONE_SHOT_PLATEAU_STATE"
+      fi
       run_one_shot_training
       break
     fi

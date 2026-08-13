@@ -10,6 +10,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from robotwin_critic.two_stage_rft.protocol import sha256_file
+from robotwin_critic.two_stage_rft.rollout_provenance import with_rollout_provenance
 
 
 def read_jsonl(path: Path) -> list[dict]:
@@ -180,7 +181,8 @@ def select_online_winners(
         raise ValueError("max_per_context must be non-negative; zero means all")
     grouped: dict[str, list[dict]] = defaultdict(list)
     rejected_action = rejected_process = rejected_parse = 0
-    for row in rows:
+    for raw_row in rows:
+        row = with_rollout_provenance(raw_row)
         action = row.get("action_critic", {})
         process = row.get("process_critic", {})
         if not bool(process.get("numeric_parsed", True)):
