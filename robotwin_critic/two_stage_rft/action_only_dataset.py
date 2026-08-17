@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import math
 from collections import OrderedDict
 from pathlib import Path
@@ -10,10 +9,32 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from robotwin_critic.two_stage_rft.pseudo_provenance import (
+    validate_pseudo_split_provenance,
+)
+from robotwin_critic.two_stage_rft.pseudo_action_contract import (
+    validate_pseudo_action_contract,
+    verify_legacy_pseudo_action_waiver,
+)
+from robotwin_critic.two_stage_rft.pseudo_artifact_contract import validate_pseudo_artifact_rows
 
-def read_jsonl(path: Path) -> list[dict]:
+
+def read_jsonl(path: Path) -> tuple[list[dict], list[int]]:
+    import json
+
+    rows, row_numbers = [], []
     with path.open(encoding="utf-8") as handle:
-        return [json.loads(line) for line in handle if line.strip()]
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError as error:
+                raise ValueError(
+                    f"Malformed JSON in {path} at physical line {line_number}: {error.msg}"
+                ) from error
+            row_numbers.append(line_number)
+    return rows, row_numbers
 
 
 def generated_actions_to_tensor(
@@ -37,9 +58,9 @@ def generated_actions_to_tensor(
         )
     padded = np.pad(actions, ((0, 0), (0, 1)), constant_values=0)
     aligned = padded[:, config.inverse_used_action_channel_ids]
-    mask = np.ones_like(padded, dtype=bool)
-    mask[:, -1] = False
-    aligned_mask = mask[:, config.inverse_used_action_channel_ids]
+    action_mask = np.ones_like(actions, dtype=bool)
+    padded_mask = np.pad(action_mask, ((0, 0), (0, 1)), constant_values=False)
+    aligned_mask = padded_mask[:, config.inverse_used_action_channel_ids]
     q01 = np.asarray(config.norm_stat["q01"], dtype=np.float32)[None]
     q99 = np.asarray(config.norm_stat["q99"], dtype=np.float32)[None]
     aligned = (aligned - q01) / (q99 - q01 + 1e-6) * 2.0 - 1.0
@@ -48,10 +69,6 @@ def generated_actions_to_tensor(
     action_per_frame = int(config.action_per_frame)
     aligned = aligned.reshape(latent_frames, action_per_frame, -1)
     aligned_mask = aligned_mask.reshape(latent_frames, action_per_frame, -1)
-    # Frame zero is the current-state conditioning block. Inference clamps it
-    # to zero in normalized model space, so it is context rather than a target.
-    aligned[0] = 0.0
-    aligned_mask[0] = False
     return (
         torch.from_numpy(aligned.transpose(2, 0, 1)[..., None]).float(),
         torch.from_numpy(aligned_mask.transpose(2, 0, 1)[..., None]).bool(),
@@ -66,19 +83,35 @@ class GeneratedChunkDataset(torch.utils.data.Dataset):
         *,
         expected_split_sha256: str,
         expected_selection_mode: str,
+        split_manifest_path: str | Path | None = None,
+        legacy_pseudo_action_waiver_sha256: str | None = None,
+        legacy_pseudo_action_waiver_rows: int | None = None,
     ):
         self.path = Path(selected_jsonl).expanduser().resolve()
-        self.rows = read_jsonl(self.path)
+        legacy_waiver = verify_legacy_pseudo_action_waiver(
+            self.path,
+            expected_sha256=legacy_pseudo_action_waiver_sha256,
+            expected_rows=legacy_pseudo_action_waiver_rows,
+        )
+        self.rows, row_numbers = read_jsonl(self.path)
         if not self.rows:
             raise ValueError(f"No selected pseudo chunks in {self.path}")
-        split_hashes = {
-            str(row.get("split_manifest_sha256", "")) for row in self.rows
-        }
-        if split_hashes != {expected_split_sha256}:
-            raise ValueError(
-                f"Pseudo data split hashes {split_hashes} do not match "
-                f"Stage-1 split {expected_split_sha256}"
-            )
+        validate_pseudo_action_contract(
+            self.rows,
+            expected_latent_frames=config.frame_chunk_size,
+            action_per_frame=config.action_per_frame,
+            row_numbers=row_numbers,
+            allow_legacy_pseudo_action_metadata=legacy_waiver,
+        )
+        validate_pseudo_artifact_rows(
+            self.rows, jsonl_parent=self.path.parent,
+            row_numbers=row_numbers,
+        )
+        self.provenance_report = validate_pseudo_split_provenance(
+            self.rows,
+            expected_split_sha256=expected_split_sha256,
+            split_manifest_path=split_manifest_path,
+        )
         selection_modes = {
             str(row.get("rft_selection", {}).get("mode", ""))
             for row in self.rows
@@ -88,6 +121,21 @@ class GeneratedChunkDataset(torch.utils.data.Dataset):
                 f"Pseudo data selection modes {selection_modes} do not match "
                 f"expected mode {expected_selection_mode}"
             )
+        for row_number, row in zip(row_numbers, self.rows):
+            for key in ("latent_path", "text_emb_path", "action_path"):
+                if key not in row:
+                    raise ValueError(
+                        f"Selected pseudo row {row_number} is missing {key!r}"
+                    )
+                path = Path(row[key]).expanduser()
+                if not path.is_absolute():
+                    path = self.path.parent / path
+                if not path.is_file():
+                    raise FileNotFoundError(
+                        f"Selected pseudo row {row_number} {key} does not exist: "
+                        f"{path}"
+                    )
+                row[key] = str(path)
         self.config = config
         self.empty_emb = torch.load(
             config.empty_emb_path, map_location="cpu", weights_only=False
@@ -133,7 +181,7 @@ class GeneratedChunkDataset(torch.utils.data.Dataset):
             config=self.config,
         )
         return {
-            "latents": latents.float(),
+            "latents": latents.to(dtype=self.config.param_dtype),
             "actions": actions,
             "actions_mask": actions_mask,
             "text_emb": text_emb.to(dtype=self.config.param_dtype),

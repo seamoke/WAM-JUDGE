@@ -4,6 +4,77 @@ This pipeline calibrates a kinematic Action Critic, builds action-free Stage-2
 contexts, generates WAM chunk candidates, filters them with Action Critic and
 VLAC, and repeatedly fine-tunes the full WAM transformer.
 
+## Current one-shot RFT training
+
+The current production path can also skip online collection and train directly
+from the saved 20,477-row pseudo buffer. It uses the Stage-1 checkpoint at step
+15,000 as the initializer and optimizes:
+
+```text
+mean(Stage-1 + Stage-2 real latent_loss + action_loss)
+  + lambda * mean(pseudo latent_loss + action_loss)
+```
+
+The real stream uses the official full-chunk loader and official Base SFT
+`latent_loss + action_loss`. The pseudo stream is an independent auxiliary
+gradient, with `lambda` linearly warmed up during the first 100 optimizer
+updates. Both streams draw 64 samples per optimizer update by default.
+
+The updated scheduler accepts any positive optimizer-step count. Checkpoint
+steps are read from the configured save interval and are no longer replaced by
+the old fixed `3000,6000,...,15000` schedule. Completion validation likewise
+accepts the configured positive step count instead of requiring exactly 15,000.
+
+### 8x MI355X preset
+
+For one node with eight 280GB AMD MI355X GPUs, use:
+
+```bash
+cd /workspace/lingbot-training
+
+bash script/run_stage1_stage2_real_pseudo_lambda01_8xmi355_16k.sh
+```
+
+The preset has the following effective settings:
+
+| Setting | Value |
+|---|---:|
+| initializer | `checkpoint_step_15000` |
+| real data | all Stage-1 + Stage-2 real chunks |
+| pseudo data | validated 20,477-row buffer |
+| GPUs | `0,1,2,3,4,5,6,7` |
+| optimizer steps | 16,000 |
+| checkpoints | step 8,000 and 16,000 |
+| real batch per GPU | 8 |
+| real global batch | 64 |
+| gradient accumulation | 1 |
+| pseudo global batch | 64 |
+| pseudo loss coefficient | 0.1 |
+| pseudo warmup | 100 steps |
+| activation checkpointing | off |
+| trainable parameters | full transformer |
+
+The larger per-GPU real batch changes execution packing, not the effective real
+batch: `8 GPUs x 8 samples x GA 1 = 64`. Pseudo batches remain global batch 64.
+The generic launcher validates that `batch_per_gpu x world_size` divides 64, so
+invalid combinations fail before model loading.
+
+Paths can be overridden without editing the script:
+
+```bash
+PROJECT_ROOT=/path/to/WAM-JUDGE \
+LINGBOT_ROOT=/path/to/lingbot-va \
+PREPARED_DATA_ROOT=/path/to/prepared-stage1-stage2 \
+STAGE1_CHECKPOINT=/path/to/checkpoint_step_15000 \
+PSEUDO_JSONL=/path/to/one_shot_pseudo_buffer.validated.jsonl \
+RUN_ID=my-mi355-rft \
+bash script/run_stage1_stage2_real_pseudo_lambda01_8xmi355_16k.sh
+```
+
+The output is written to
+`$LINGBOT_ROOT/train_out/robotwin/$RUN_ID`. SwanLab metrics are uploaded to
+`lingbot-va-robotwin` unless `LINGBOT_SWANLAB_PROJECT` is overridden.
+
 The canonical entry point is:
 
 ```text

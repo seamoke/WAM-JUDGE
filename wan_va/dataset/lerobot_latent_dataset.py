@@ -105,6 +105,13 @@ def construct_lerobot_multi_processor(config,
         datasets_out_lst = pool.map(construct_func, repo_list)
 
     datasets_out_lst = [d for d in datasets_out_lst if d is not None]
+    if os.environ.get('LINGBOT_DATASET_POOL_DEFER_EMPTY_EMB', '0') == '1':
+        # Every repo uses the same read-only prompt embedding. Loading it once
+        # in the parent avoids sending one large Tensor per Pool result through
+        # the container's small /dev/shm while retaining full Pool parallelism.
+        empty_emb = torch.load(config.empty_emb_path, weights_only=False)
+        for dataset in datasets_out_lst:
+            dataset.empty_emb = empty_emb
     if not datasets_out_lst:
         raise RuntimeError(f"No valid datasets under {config.dataset_path}")
     return datasets_out_lst
@@ -163,6 +170,12 @@ class MultiLatentLeRobotDataset(torch.utils.data.Dataset):
         return cur_dset[local_idx]
 
 class LatentLeRobotDataset(LeRobotDataset):
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        if os.environ.get('LINGBOT_DATASET_POOL_DEFER_EMPTY_EMB', '0') == '1':
+            state.pop('empty_emb', None)
+        return state
+
     def __init__(
         self,
         repo_id,
@@ -199,7 +212,8 @@ class LatentLeRobotDataset(LeRobotDataset):
         self.episode_data_index = get_episode_data_index(self.meta.episodes, self.episodes)
         
         self.latent_path = Path(repo_id) / 'latents'
-        self.empty_emb = torch.load(config.empty_emb_path, weights_only=False)
+        if os.environ.get('LINGBOT_DATASET_POOL_DEFER_EMPTY_EMB', '0') != '1':
+            self.empty_emb = torch.load(config.empty_emb_path, weights_only=False)
         self.config = config
         self.cfg_prob = config.cfg_prob
         self.used_video_keys = config.obs_cam_keys

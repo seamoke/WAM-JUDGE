@@ -48,18 +48,33 @@ def compare(base_dir: Path, checkpoint_dir: Path) -> dict:
             f"Checkpoint key mismatch: missing={unexpected_missing[:5]} extra={extra[:5]}"
         )
     comparable = sorted(set(base) & set(checkpoint))
+    base_tensor_finite = {
+        key: bool(torch.isfinite(load_tensor(base, key)).all()) for key in base
+    }
+    checkpoint_tensor_finite = {
+        key: bool(torch.isfinite(load_tensor(checkpoint, key)).all())
+        for key in checkpoint
+    }
     group_results = {}
+    base_finite = all(base_tensor_finite.values())
+    checkpoint_finite = all(checkpoint_tensor_finite.values())
     for group, prefixes in REQUIRED_GROUPS.items():
         keys = [key for key in comparable if _matches(key, prefixes)]
         if not keys:
             raise ValueError(f"No checkpoint tensors found for required group {group}")
         changed = []
         maximum_delta = 0.0
+        group_finite = True
         for key in keys:
             before = load_tensor(base, key)
             after = load_tensor(checkpoint, key)
             if before.shape != after.shape or before.dtype != after.dtype:
                 raise ValueError(f"Tensor contract changed for {key}")
+            before_finite = base_tensor_finite[key]
+            after_finite = checkpoint_tensor_finite[key]
+            group_finite = group_finite and before_finite and after_finite
+            if not before_finite or not after_finite:
+                continue
             if not torch.equal(before, after):
                 changed.append(key)
                 maximum_delta = max(
@@ -71,7 +86,8 @@ def compare(base_dir: Path, checkpoint_dir: Path) -> dict:
             "changed_tensors": len(changed),
             "changed_examples": changed[:8],
             "maximum_delta": maximum_delta,
-            "passed": bool(changed),
+            "finite": group_finite,
+            "passed": group_finite and bool(changed),
         }
     result = {
         "base": str(base_dir.resolve()),
@@ -79,8 +95,21 @@ def compare(base_dir: Path, checkpoint_dir: Path) -> dict:
         "base_tensors": len(base),
         "checkpoint_tensors": len(checkpoint),
         "known_unused_base_keys_omitted_on_save": missing,
+        "base_finite": base_finite,
+        "checkpoint_finite": checkpoint_finite,
+        "finite": base_finite and checkpoint_finite,
+        "nonfinite_base_tensors": sorted(
+            key for key, finite in base_tensor_finite.items() if not finite
+        ),
+        "nonfinite_checkpoint_tensors": sorted(
+            key for key, finite in checkpoint_tensor_finite.items() if not finite
+        ),
         "groups": group_results,
-        "passed": all(group["passed"] for group in group_results.values()),
+        "passed": (
+            base_finite
+            and checkpoint_finite
+            and all(group["passed"] for group in group_results.values())
+        ),
     }
     if not result["passed"]:
         raise RuntimeError(json.dumps(result, indent=2))
