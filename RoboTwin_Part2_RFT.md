@@ -7,9 +7,10 @@ VLAC, and repeatedly fine-tunes the full WAM transformer.
 ## Current one-shot RFT training
 
 The current production path can also skip online collection and train directly
-from the saved 20,477-row pseudo buffer. **Both experiments below must initialize
-from the Stage-1 SFT `checkpoint_step_15000`; neither starts from a previously
-RFT-trained checkpoint.** The main experiment optimizes:
+from the saved 20,477-row pseudo buffer. Experiment A initializes from the
+Stage-1 SFT `checkpoint_step_15000`. Experiment B intentionally initializes
+from the original `lingbot-va-base` model to reproduce Stage-1 training through
+the current RFT code path. The main experiment optimizes:
 
 ```text
 mean(Stage-1 + Stage-2 real latent_loss + action_loss)
@@ -84,29 +85,31 @@ official Base SFT loss do not themselves cause a regression:
 ```bash
 cd /workspace/lingbot-training
 
-bash script/run_stage1_real_only_8xmi355_10k.sh
+bash script/run_stage1_real_from_base_8xmi355_15k.sh
 ```
 
-This control also initializes from the Stage-1 SFT
-`checkpoint_step_15000`, but trains for 10,000 optimizer steps using only the
-complete Stage-1 real dataset. Its pseudo coefficient is exactly zero, so no
-pseudo sample contributes a forward pass, gradient, or source-count update.
+This control initializes from the original `lingbot-va-base` model and trains
+for the full 15,000-step Stage-1 schedule using only the complete Stage-1 real
+dataset. It uses the same `1e-5` learning rate, constant scheduler, 10-step
+warmup, global batch 64, and 3,000-step checkpoint cadence as the original
+Stage-1 SFT. Its pseudo coefficient is exactly zero, so no pseudo sample
+contributes a forward pass, gradient, or source-count update.
 
 | Setting | Value |
 |---|---:|
-| initializer | Stage-1 SFT `checkpoint_step_15000` |
+| initializer | original `lingbot-va-base` |
 | real data | all Stage-1 real chunks only |
 | pseudo loss coefficient | 0 |
 | GPUs | `0,1,2,3,4,5,6,7` |
-| optimizer steps | 10,000 |
-| checkpoints | step 5,000 and 10,000 |
+| optimizer steps | 15,000 |
+| checkpoints | step 3,000, 6,000, 9,000, 12,000 and 15,000 |
 | real batch per GPU | 8 |
 | real global batch | 64 |
 | gradient accumulation | 1 |
 | activation checkpointing | off |
 | trainable parameters | full transformer |
 
-Evaluate Experiment B against the unmodified Stage-1 15k checkpoint using the
+Evaluate Experiment B against the official Stage-1 15k checkpoint using the
 same task list, seeds, evaluator, and inference settings. If Experiment B drops
 substantially, investigate the real loader/loss or optimizer path before
 attributing Experiment A's behavior to pseudo supervision. Experiment A and B

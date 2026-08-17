@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Loss-control experiment: continue Stage-1 checkpoint_step_15000 on Stage-1
-# real data only. It intentionally shares no checkpoint state with Experiment A.
-RUN_ID="${RUN_ID:-stage1_15k_real_only_10k_save5k_8xmi355_$(date -u +%Y%m%dT%H%M%SZ)}"
+# Loss-control experiment: reproduce Stage-1 SFT from the original Base model
+# through the current RFT trainer's real-only path.
+RUN_ID="${RUN_ID:-stage1_real_from_base_15k_save3k_8xmi355_$(date -u +%Y%m%dT%H%M%SZ)}"
 
 export HIP_VISIBLE_DEVICES="${HIP_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-$HIP_VISIBLE_DEVICES}"
@@ -12,7 +12,7 @@ export PROJECT_ROOT="${PROJECT_ROOT:-/workspace/lingbot-training}"
 export LINGBOT_ROOT="${LINGBOT_ROOT:-/workspace/lingbot-va}"
 export PREPARED_DATA_ROOT="${PREPARED_DATA_ROOT:-$PROJECT_ROOT/datasets/robotwin-clean-aug-two-stage-seed42}"
 export WAM_PYTHON="${WAM_PYTHON:-$PROJECT_ROOT/.runtime/.venv/bin/python}"
-export STAGE1_CHECKPOINT="${STAGE1_CHECKPOINT:-$LINGBOT_ROOT/models/lingbot-va-stage1-checkpoints/checkpoint_step_15000}"
+export STAGE1_CHECKPOINT="${STAGE1_CHECKPOINT:-$LINGBOT_ROOT/models/lingbot-va-base}"
 # The generic launcher validates the artifact contract at startup even when its
 # loss weight is zero. The training step itself performs no pseudo forward pass.
 export PSEUDO_JSONL="${PSEUDO_JSONL:-$PROJECT_ROOT/datasets/robotwin-stage2-oneshot-pseudo-chunks/one_shot_pseudo_buffer.validated.jsonl}"
@@ -32,8 +32,8 @@ export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-1}"
 export LINGBOT_DATASET_POOL_DEFER_EMPTY_EMB=1
 
 export RFT_SCHEDULE_MODE=base-auxiliary-pseudo
-export RFT_BASE_AUXILIARY_STEPS="${RFT_BASE_AUXILIARY_STEPS:-10000}"
-export RFT_BASE_AUXILIARY_SAVE_INTERVAL="${RFT_BASE_AUXILIARY_SAVE_INTERVAL:-5000}"
+export RFT_BASE_AUXILIARY_STEPS="${RFT_BASE_AUXILIARY_STEPS:-15000}"
+export RFT_BASE_AUXILIARY_SAVE_INTERVAL="${RFT_BASE_AUXILIARY_SAVE_INTERVAL:-3000}"
 export RFT_BASE_AUXILIARY_ACTIVATION_CHECKPOINTING=0
 export RFT_BASE_AUXILIARY_BATCH_SIZE_PER_GPU="${RFT_BASE_AUXILIARY_BATCH_SIZE_PER_GPU:-8}"
 export REAL_DATA_MODE=stage1
