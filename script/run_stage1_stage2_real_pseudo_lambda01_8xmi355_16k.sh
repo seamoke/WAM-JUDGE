@@ -3,7 +3,7 @@ set -euo pipefail
 
 # 8x AMD MI355X production preset. Override paths or RUN_ID in the environment
 # when the remote cluster uses a different mount layout.
-RUN_ID="${RUN_ID:-stage1_stage2_real_pseudo64_lambda01_16k_save8k_8xmi355_$(date -u +%Y%m%dT%H%M%SZ)}"
+RUN_ID="${RUN_ID:-stage1_stage2_real_pseudo64_lambda01_16k_save4k_8xmi355_$(date -u +%Y%m%dT%H%M%SZ)}"
 
 export HIP_VISIBLE_DEVICES="${HIP_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-$HIP_VISIBLE_DEVICES}"
@@ -31,9 +31,9 @@ export LINGBOT_DATASET_POOL_DEFER_EMPTY_EMB=1
 
 export RFT_SCHEDULE_MODE=base-auxiliary-pseudo
 export RFT_BASE_AUXILIARY_STEPS="${RFT_BASE_AUXILIARY_STEPS:-16000}"
-export RFT_BASE_AUXILIARY_SAVE_INTERVAL="${RFT_BASE_AUXILIARY_SAVE_INTERVAL:-8000}"
+export RFT_BASE_AUXILIARY_SAVE_INTERVAL="${RFT_BASE_AUXILIARY_SAVE_INTERVAL:-4000}"
 export RFT_BASE_AUXILIARY_ACTIVATION_CHECKPOINTING=0
-export RFT_BASE_AUXILIARY_BATCH_SIZE_PER_GPU="${RFT_BASE_AUXILIARY_BATCH_SIZE_PER_GPU:-8}"
+export RFT_BASE_AUXILIARY_BATCH_SIZE_PER_GPU="${RFT_BASE_AUXILIARY_BATCH_SIZE_PER_GPU:-1}"
 export REAL_DATA_MODE=stage1-stage2
 export REAL_CHUNK_MODE=full
 export REAL_DATA_FRACTION=1.0

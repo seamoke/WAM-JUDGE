@@ -46,18 +46,18 @@ The preset has the following effective settings:
 | pseudo data | validated 20,477-row buffer |
 | GPUs | `0,1,2,3,4,5,6,7` |
 | optimizer steps | 16,000 |
-| checkpoints | step 8,000 and 16,000 |
-| real batch per GPU | 8 |
+| checkpoints | step 4,000, 8,000, 12,000 and 16,000 |
+| real batch per GPU | 1 |
 | real global batch | 64 |
-| gradient accumulation | 1 |
+| gradient accumulation | 8 |
 | pseudo global batch | 64 |
 | pseudo loss coefficient | 0.1 |
 | pseudo warmup | 100 steps |
 | activation checkpointing | off |
 | trainable parameters | full transformer |
 
-The larger per-GPU real batch changes execution packing, not the effective real
-batch: `8 GPUs x 8 samples x GA 1 = 64`. Pseudo batches remain global batch 64.
+The real execution packing is `8 GPUs x 1 sample x GA 8 = 64`, matching the
+Base SFT microbatch and accumulation boundary. Pseudo batches remain global batch 64.
 The generic launcher validates that `batch_per_gpu x world_size` divides 64, so
 invalid combinations fail before model loading.
 
@@ -96,6 +96,11 @@ transfer, it saves only the final step-15,000 model. Its pseudo coefficient is
 exactly zero, so no pseudo sample contributes a forward pass, gradient, or
 source-count update.
 
+This is enforced as a runtime invariant at every optimizer-update boundary:
+when `PSEUDO_LOSS_WEIGHT=0`, the pseudo source count must remain zero. The
+pseudo JSONL is still read during CPU-side startup validation, but no pseudo
+batch is fetched for model execution and no pseudo forward/backward is run.
+
 | Setting | Value |
 |---|---:|
 | initializer | original `lingbot-va-base` |
@@ -104,9 +109,9 @@ source-count update.
 | GPUs | `0,1,2,3,4,5,6,7` |
 | optimizer steps | 15,000 |
 | checkpoints | final step 15,000 only |
-| real batch per GPU | 8 |
+| real batch per GPU | 1 |
 | real global batch | 64 |
-| gradient accumulation | 1 |
+| gradient accumulation | 8 |
 | activation checkpointing | off |
 | trainable parameters | full transformer |
 

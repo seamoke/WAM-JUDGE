@@ -173,6 +173,14 @@ def _compatible_gradient_shards(parameter, current, real, pseudo) -> bool:
     return all(shape == local_shapes[0] for shape in local_shapes[1:])
 
 
+def _require_zero_pseudo_source_count(trainer) -> None:
+    """Fail immediately if a disabled pseudo stream ever consumes a sample."""
+    if not trainer.pseudo_enabled and int(trainer.rft_source_counts[1].item()) != 0:
+        raise RuntimeError(
+            "pseudo source count must remain zero when pseudo loss weight is zero"
+        )
+
+
 def production_auxiliary_train_step(trainer, batch, batch_idx):
     """Run the production real-plus-optional-pseudo auxiliary update."""
     accumulation = int(trainer.gradient_accumulation_steps)
@@ -191,6 +199,8 @@ def production_auxiliary_train_step(trainer, batch, batch_idx):
     losses = {"latent_loss": real_latent.detach(), "action_loss": real_action.detach(), "should_log": False}
     if batch_idx + 1 != accumulation:
         return losses
+
+    _require_zero_pseudo_source_count(trainer)
 
     # compute_loss already divides each loss by A=gradient_accumulation_steps.
     # The synchronized real shards therefore equal (1/A) sum_i grad(L_real_i),
@@ -258,6 +268,8 @@ def production_auxiliary_train_step(trainer, batch, batch_idx):
             "combined boundary",
             incompatible=incompatible,
         )
+
+    _require_zero_pseudo_source_count(trainer)
 
     total_norm = torch.nn.utils.clip_grad_norm_(trainer.transformer.parameters(), 2.0)
     trainer.optimizer.step()
