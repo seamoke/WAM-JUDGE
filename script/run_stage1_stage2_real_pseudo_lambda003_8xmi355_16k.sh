@@ -3,7 +3,7 @@ set -euo pipefail
 
 # 8x AMD MI355X production preset. Override paths or RUN_ID in the environment
 # when the remote cluster uses a different mount layout.
-RUN_ID="${RUN_ID:-stage1_stage2_real_pseudo64_lambda01_16k_save4k_8xmi355_$(date -u +%Y%m%dT%H%M%SZ)}"
+RUN_ID="${RUN_ID:-stage1_stage2_real_pseudo64_lambda003_16k_save4k_8xmi355_$(date -u +%Y%m%dT%H%M%SZ)}"
 
 export HIP_VISIBLE_DEVICES="${HIP_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-$HIP_VISIBLE_DEVICES}"
@@ -39,8 +39,8 @@ export REAL_CHUNK_MODE=full
 export REAL_DATA_FRACTION=1.0
 export TARGET_GLOBAL_BATCH=64
 export PSEUDO_GLOBAL_BATCH="${PSEUDO_GLOBAL_BATCH:-64}"
-export PSEUDO_LOSS_WEIGHT="${PSEUDO_LOSS_WEIGHT:-0.1}"
-export PSEUDO_LOSS_WARMUP_STEPS="${PSEUDO_LOSS_WARMUP_STEPS:-100}"
+export PSEUDO_LOSS_WEIGHT="${PSEUDO_LOSS_WEIGHT:-0.03}"
+export PSEUDO_LOSS_WARMUP_STEPS="${PSEUDO_LOSS_WARMUP_STEPS:-1000}"
 export DATASET_INIT_WORKERS="${DATASET_INIT_WORKERS:-128}"
 export TRAIN_LOAD_WORKERS="${TRAIN_LOAD_WORKERS:-8}"
 export LEGACY_PSEUDO_ACTION_WAIVER_SHA256="${LEGACY_PSEUDO_ACTION_WAIVER_SHA256:-a330e3004fbb9eb30213751d981cfd908971d3baa8806e035cad296adc43bd39}"

@@ -19,7 +19,7 @@ mean(Stage-1 + Stage-2 real latent_loss + action_loss)
 
 The real stream uses the official full-chunk loader and official Base SFT
 `latent_loss + action_loss`. The pseudo stream is an independent auxiliary
-gradient, with `lambda` linearly warmed up during the first 100 optimizer
+gradient, with `lambda` linearly warmed up during the first 1,000 optimizer
 updates. Both streams draw 64 samples per optimizer update by default.
 
 The updated scheduler accepts any positive optimizer-step count. Checkpoint
@@ -34,7 +34,7 @@ For one node with eight 280GB AMD MI355X GPUs, use:
 ```bash
 cd /workspace/lingbot-training
 
-bash script/run_stage1_stage2_real_pseudo_lambda01_8xmi355_16k.sh
+bash script/run_stage1_stage2_real_pseudo_lambda003_8xmi355_16k.sh
 ```
 
 The preset has the following effective settings:
@@ -51,8 +51,8 @@ The preset has the following effective settings:
 | real global batch | 64 |
 | gradient accumulation | 8 |
 | pseudo global batch | 64 |
-| pseudo loss coefficient | 0.1 |
-| pseudo warmup | 100 steps |
+| pseudo loss coefficient | 0.03 |
+| pseudo warmup | 1,000 steps |
 | activation checkpointing | off |
 | trainable parameters | full transformer |
 
@@ -70,7 +70,7 @@ PREPARED_DATA_ROOT=/path/to/prepared-stage1-stage2 \
 STAGE1_CHECKPOINT=/path/to/checkpoint_step_15000 \
 PSEUDO_JSONL=/path/to/one_shot_pseudo_buffer.validated.jsonl \
 RUN_ID=my-mi355-rft \
-bash script/run_stage1_stage2_real_pseudo_lambda01_8xmi355_16k.sh
+bash script/run_stage1_stage2_real_pseudo_lambda003_8xmi355_16k.sh
 ```
 
 The output is written to
