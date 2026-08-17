@@ -179,22 +179,30 @@ def summarize_pseudo_buffer(path: str | Path) -> dict[str, float]:
 
 def filter_real_dataset_by_split(
     dataset, split_manifest: str | Path, *, stages: tuple[str, ...]
-) -> dict[str, int]:
+) -> dict[str, object]:
     """Restrict the official source loader to manifest-selected episodes."""
     manifest = json.loads(Path(split_manifest).read_text(encoding="utf-8"))
-    allowed: dict[str, set[int]] = {}
+    allowed_by_stage: dict[str, dict[str, set[int]]] = {
+        stage: {} for stage in stages
+    }
     for task in manifest["tasks"]:
         for domain in task["domains"].values():
             repo = str(Path(domain["source_repo"]).resolve())
-            episode_ids = allowed.setdefault(repo, set())
             for stage in stages:
+                episode_ids = allowed_by_stage[stage].setdefault(repo, set())
                 episode_ids.update(
                     int(index)
                     for index in domain[f"{stage}_source_episode_indices"]
                 )
 
+    allowed: dict[str, set[int]] = {}
+    for stage_allowed in allowed_by_stage.values():
+        for repo, episode_ids in stage_allowed.items():
+            allowed.setdefault(repo, set()).update(episode_ids)
+
     found: set[str] = set()
     kept_segments = 0
+    kept_segments_by_stage = {stage: 0 for stage in stages}
     for source_dataset in dataset._datasets:
         repo = str(Path(source_dataset.root).resolve())
         selected = allowed.get(repo)
@@ -208,6 +216,12 @@ def filter_real_dataset_by_split(
             if int(meta["episode_index"]) in selected
         ]
         kept_segments += len(source_dataset.new_metas)
+        for stage in stages:
+            stage_episode_ids = allowed_by_stage[stage].get(repo, set())
+            kept_segments_by_stage[stage] += sum(
+                int(meta["episode_index"]) in stage_episode_ids
+                for meta in source_dataset.new_metas
+            )
     missing = sorted(set(allowed) - found)
     if missing:
         raise RuntimeError(f"Real source repos missing from official loader: {missing[:5]}")
@@ -221,7 +235,48 @@ def filter_real_dataset_by_split(
         "source_repos": len(found),
         "selected_episodes": sum(len(indices) for indices in allowed.values()),
         "kept_segments": kept_segments,
+        "selected_episodes_by_stage": {
+            stage: sum(len(indices) for indices in stage_allowed.values())
+            for stage, stage_allowed in allowed_by_stage.items()
+        },
+        "kept_segments_by_stage": kept_segments_by_stage,
     }
+
+
+def build_real_dataset_for_mode(
+    config,
+    num_init_worker: int,
+    *,
+    real_data_mode: str,
+    split_manifest: str | Path,
+    dataset_factory=None,
+):
+    """Build the official real dataset and apply the requested protocol split."""
+    if dataset_factory is None:
+        from wan_va.dataset import MultiLatentLeRobotDataset
+
+        dataset_factory = MultiLatentLeRobotDataset
+    filter_report: dict[str, object] = {
+        "filter_applied": False,
+        "real_data_mode": real_data_mode,
+    }
+    if real_data_mode in ("stage2", "stage1-stage2"):
+        manifest_path = Path(split_manifest)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        config.dataset_path = str(Path(manifest["source_root"]).resolve())
+
+    real = dataset_factory(config=config, num_init_worker=num_init_worker)
+    if real_data_mode in ("stage2", "stage1-stage2"):
+        stages = (
+            ("stage2",)
+            if real_data_mode == "stage2"
+            else ("stage1", "stage2")
+        )
+        filter_report.update(
+            filter_real_dataset_by_split(real, split_manifest, stages=stages)
+        )
+        filter_report["filter_applied"] = True
+    return real, filter_report
 
 
 def write_source_counts(
@@ -377,25 +432,19 @@ def main() -> None:
             external_swanlab_run = None
             dataset_report = {}
 
-            def mixed_factory(config, num_init_worker):
-                if args.real_data_mode in ("stage2", "stage1-stage2"):
-                    manifest = json.loads(
-                        args.split_manifest.read_text(encoding="utf-8")
-                    )
-                    config.dataset_path = str(Path(manifest["source_root"]).resolve())
-                real = MultiLatentLeRobotDataset(
-                    config=config, num_init_worker=num_init_worker
+            def real_factory(config, num_init_worker):
+                real, filter_report = build_real_dataset_for_mode(
+                    config,
+                    num_init_worker,
+                    real_data_mode=args.real_data_mode,
+                    split_manifest=args.split_manifest,
+                    dataset_factory=MultiLatentLeRobotDataset,
                 )
-                if args.real_data_mode in ("stage2", "stage1-stage2"):
-                    filter_real_dataset_by_split(
-                        real,
-                        args.split_manifest,
-                        stages=(
-                            ("stage2",)
-                            if args.real_data_mode == "stage2"
-                            else ("stage1", "stage2")
-                        ),
-                    )
+                dataset_report["real_filter"] = filter_report
+                return real
+
+            def mixed_factory(config, num_init_worker):
+                real = real_factory(config, num_init_worker)
                 if args.real_chunk_mode == "first-transition":
                     real = FirstTransitionChunkDataset(
                         real,
@@ -439,7 +488,12 @@ def main() -> None:
             def mixed_collate(batch):
                 return mixed_pad_latent_batch_collate(batch, original_collate)
 
-            if not self.auxiliary_mode:
+            if self.auxiliary_mode:
+                # Keep the official Base loader/loss contract, but never allow
+                # stage1-stage2 to silently expand from the manifest selection
+                # to every episode under the original source root.
+                train_module.MultiLatentLeRobotDataset = real_factory
+            else:
                 train_module.MultiLatentLeRobotDataset = mixed_factory
                 train_module.pad_latent_batch_collate = mixed_collate
             if getattr(config, "enable_swanlab", False) and config.rank == 0:
@@ -488,6 +542,24 @@ def main() -> None:
                 self.transformer, rank=int(config.rank)
             )
             logger.info("RFT loaded model attention preflight: %s", model_shape_report)
+            if self.auxiliary_mode and args.real_data_mode in (
+                "stage2",
+                "stage1-stage2",
+            ):
+                real_filter = dataset_report.get("real_filter")
+                if not isinstance(real_filter, dict) or not real_filter.get(
+                    "filter_applied"
+                ):
+                    raise RuntimeError(
+                        "Auxiliary real loader did not apply the split manifest"
+                    )
+                kept_segments = int(real_filter.get("kept_segments", -1))
+                if kept_segments != len(self.train_loader.dataset):
+                    raise RuntimeError(
+                        "Auxiliary real loader length does not match the filtered "
+                        f"manifest segments: loader={len(self.train_loader.dataset)} "
+                        f"filtered={kept_segments}"
+                    )
             report = enable_full_finetune(self.transformer)
             optimizer_report = verify_full_optimizer(
                 self.transformer, self.optimizer
