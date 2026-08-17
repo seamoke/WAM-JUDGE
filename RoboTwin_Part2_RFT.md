@@ -7,10 +7,10 @@ VLAC, and repeatedly fine-tunes the full WAM transformer.
 ## Current one-shot RFT training
 
 The current production path can also skip online collection and train directly
-from the saved 20,477-row pseudo buffer. Experiment A initializes from the
-Stage-1 SFT `checkpoint_step_15000`. Experiment B intentionally initializes
-from the original `lingbot-va-base` model to reproduce Stage-1 training through
-the current RFT code path. The main experiment optimizes:
+from the saved 20,477-row pseudo buffer. Both experiments initialize from the
+same Stage-1 SFT `checkpoint_step_15000`. Experiment B disables pseudo entirely
+to isolate whether continued training on the Stage-1 + Stage-2 real union
+causes model drift. The main experiment optimizes:
 
 ```text
 mean(Stage-1 + Stage-2 real latent_loss + action_loss)
@@ -19,7 +19,7 @@ mean(Stage-1 + Stage-2 real latent_loss + action_loss)
 
 The real stream uses the official full-chunk loader and official Base SFT
 `latent_loss + action_loss`. The pseudo stream is an independent auxiliary
-gradient, with `lambda` linearly warmed up during the first 100 optimizer
+gradient, with `lambda` linearly warmed up during the first 1,000 optimizer
 updates. Both streams draw 64 samples per optimizer update by default.
 
 The updated scheduler accepts any positive optimizer-step count. Checkpoint
@@ -34,7 +34,7 @@ For one node with eight 280GB AMD MI355X GPUs, use:
 ```bash
 cd /workspace/lingbot-training
 
-bash script/run_stage1_stage2_real_pseudo_lambda01_8xmi355_16k.sh
+bash script/run_stage1_stage2_real_pseudo_lambda003_8xmi355_16k.sh
 ```
 
 The preset has the following effective settings:
@@ -51,8 +51,8 @@ The preset has the following effective settings:
 | real global batch | 64 |
 | gradient accumulation | 8 |
 | pseudo global batch | 64 |
-| pseudo loss coefficient | 0.1 |
-| pseudo warmup | 100 steps |
+| pseudo loss coefficient | 0.03 |
+| pseudo warmup | 1,000 steps |
 | activation checkpointing | off |
 | trainable parameters | full transformer |
 
@@ -70,28 +70,28 @@ PREPARED_DATA_ROOT=/path/to/prepared-stage1-stage2 \
 STAGE1_CHECKPOINT=/path/to/checkpoint_step_15000 \
 PSEUDO_JSONL=/path/to/one_shot_pseudo_buffer.validated.jsonl \
 RUN_ID=my-mi355-rft \
-bash script/run_stage1_stage2_real_pseudo_lambda01_8xmi355_16k.sh
+bash script/run_stage1_stage2_real_pseudo_lambda003_8xmi355_16k.sh
 ```
 
 The output is written to
 `$LINGBOT_ROOT/train_out/robotwin/$RUN_ID`. SwanLab metrics are uploaded to
 `lingbot-va-robotwin` unless `LINGBOT_SWANLAB_PROJECT` is overridden.
 
-### Experiment B: Stage-1 real-only loss control
+### Experiment B: Stage-1 + Stage-2 real-only drift control
 
-Run a second, independent experiment to verify that the real-data loader and
-official Base SFT loss do not themselves cause a regression:
+Run a second, independent experiment to measure drift caused by continued
+training on the two-stage real-data union without pseudo supervision:
 
 ```bash
 cd /workspace/lingbot-training
 
-bash script/run_stage1_real_from_base_8xmi355_15k.sh
+bash script/run_stage1_stage2_real_only_from_stage1_15k_8xmi355_15k.sh
 ```
 
-This control initializes from the original `lingbot-va-base` model and trains
-for the full 15,000-step Stage-1 schedule using only the complete Stage-1 real
-dataset. It uses the same `1e-5` learning rate, constant scheduler, 10-step
-warmup and global batch 64 as the original Stage-1 SFT. To reduce storage and
+This control initializes from the same Stage-1 SFT `checkpoint_step_15000` as
+Experiment A and trains for 15,000 optimizer steps using all Stage-1 + Stage-2
+real chunks. It uses the same real loader, learning rate, scheduler, warmup,
+microbatch, and accumulation settings as Experiment A. To reduce storage and
 transfer, it saves only the final step-15,000 model. Its pseudo coefficient is
 exactly zero, so no pseudo sample contributes a forward pass, gradient, or
 source-count update.
@@ -103,8 +103,8 @@ batch is fetched for model execution and no pseudo forward/backward is run.
 
 | Setting | Value |
 |---|---:|
-| initializer | original `lingbot-va-base` |
-| real data | all Stage-1 real chunks only |
+| initializer | Stage-1 SFT `checkpoint_step_15000` |
+| real data | all Stage-1 + Stage-2 real chunks |
 | pseudo loss coefficient | 0 |
 | GPUs | `0,1,2,3,4,5,6,7` |
 | optimizer steps | 15,000 |
@@ -115,12 +115,12 @@ batch is fetched for model execution and no pseudo forward/backward is run.
 | activation checkpointing | off |
 | trainable parameters | full transformer |
 
-Evaluate Experiment B against the official Stage-1 15k checkpoint using the
-same task list, seeds, evaluator, and inference settings. If Experiment B drops
-substantially, investigate the real loader/loss or optimizer path before
-attributing Experiment A's behavior to pseudo supervision. Experiment A and B
-write separate timestamped output directories and should be run independently,
-not resumed from one another.
+Evaluate Experiment B against the Stage-1 15k initializer using the same task
+list, seeds, evaluator, and inference settings. If Experiment B drops while the
+already-verified Stage-1-real RFT equivalence does not, the drift is attributable
+to continued training on the Stage-1 + Stage-2 real union rather than pseudo
+supervision. Experiment A and B write separate timestamped output directories
+and should be run independently, not resumed from one another.
 
 The canonical entry point is:
 
