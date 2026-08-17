@@ -7,8 +7,10 @@ VLAC, and repeatedly fine-tunes the full WAM transformer.
 ## Current one-shot RFT training
 
 The current production path can also skip online collection and train directly
-from the saved 20,477-row pseudo buffer. It uses the Stage-1 checkpoint at step
-15,000 as the initializer and optimizes:
+from the saved 20,477-row pseudo buffer. Experiment A initializes from the
+Stage-1 SFT `checkpoint_step_15000`. Experiment B intentionally initializes
+from the original `lingbot-va-base` model to reproduce Stage-1 training through
+the current RFT code path. The main experiment optimizes:
 
 ```text
 mean(Stage-1 + Stage-2 real latent_loss + action_loss)
@@ -25,7 +27,7 @@ steps are read from the configured save interval and are no longer replaced by
 the old fixed `3000,6000,...,15000` schedule. Completion validation likewise
 accepts the configured positive step count instead of requiring exactly 15,000.
 
-### 8x MI355X preset
+### Experiment A: 8x MI355X real + pseudo
 
 For one node with eight 280GB AMD MI355X GPUs, use:
 
@@ -39,23 +41,23 @@ The preset has the following effective settings:
 
 | Setting | Value |
 |---|---:|
-| initializer | `checkpoint_step_15000` |
+| initializer | Stage-1 SFT `checkpoint_step_15000` |
 | real data | all Stage-1 + Stage-2 real chunks |
 | pseudo data | validated 20,477-row buffer |
 | GPUs | `0,1,2,3,4,5,6,7` |
 | optimizer steps | 16,000 |
-| checkpoints | step 8,000 and 16,000 |
-| real batch per GPU | 8 |
+| checkpoints | step 4,000, 8,000, 12,000 and 16,000 |
+| real batch per GPU | 1 |
 | real global batch | 64 |
-| gradient accumulation | 1 |
+| gradient accumulation | 8 |
 | pseudo global batch | 64 |
 | pseudo loss coefficient | 0.1 |
 | pseudo warmup | 100 steps |
 | activation checkpointing | off |
 | trainable parameters | full transformer |
 
-The larger per-GPU real batch changes execution packing, not the effective real
-batch: `8 GPUs x 8 samples x GA 1 = 64`. Pseudo batches remain global batch 64.
+The real execution packing is `8 GPUs x 1 sample x GA 8 = 64`, matching the
+Base SFT microbatch and accumulation boundary. Pseudo batches remain global batch 64.
 The generic launcher validates that `batch_per_gpu x world_size` divides 64, so
 invalid combinations fail before model loading.
 
@@ -74,6 +76,51 @@ bash script/run_stage1_stage2_real_pseudo_lambda01_8xmi355_16k.sh
 The output is written to
 `$LINGBOT_ROOT/train_out/robotwin/$RUN_ID`. SwanLab metrics are uploaded to
 `lingbot-va-robotwin` unless `LINGBOT_SWANLAB_PROJECT` is overridden.
+
+### Experiment B: Stage-1 real-only loss control
+
+Run a second, independent experiment to verify that the real-data loader and
+official Base SFT loss do not themselves cause a regression:
+
+```bash
+cd /workspace/lingbot-training
+
+bash script/run_stage1_real_from_base_8xmi355_15k.sh
+```
+
+This control initializes from the original `lingbot-va-base` model and trains
+for the full 15,000-step Stage-1 schedule using only the complete Stage-1 real
+dataset. It uses the same `1e-5` learning rate, constant scheduler, 10-step
+warmup and global batch 64 as the original Stage-1 SFT. To reduce storage and
+transfer, it saves only the final step-15,000 model. Its pseudo coefficient is
+exactly zero, so no pseudo sample contributes a forward pass, gradient, or
+source-count update.
+
+This is enforced as a runtime invariant at every optimizer-update boundary:
+when `PSEUDO_LOSS_WEIGHT=0`, the pseudo source count must remain zero. The
+pseudo JSONL is still read during CPU-side startup validation, but no pseudo
+batch is fetched for model execution and no pseudo forward/backward is run.
+
+| Setting | Value |
+|---|---:|
+| initializer | original `lingbot-va-base` |
+| real data | all Stage-1 real chunks only |
+| pseudo loss coefficient | 0 |
+| GPUs | `0,1,2,3,4,5,6,7` |
+| optimizer steps | 15,000 |
+| checkpoints | final step 15,000 only |
+| real batch per GPU | 1 |
+| real global batch | 64 |
+| gradient accumulation | 8 |
+| activation checkpointing | off |
+| trainable parameters | full transformer |
+
+Evaluate Experiment B against the official Stage-1 15k checkpoint using the
+same task list, seeds, evaluator, and inference settings. If Experiment B drops
+substantially, investigate the real loader/loss or optimizer path before
+attributing Experiment A's behavior to pseudo supervision. Experiment A and B
+write separate timestamped output directories and should be run independently,
+not resumed from one another.
 
 The canonical entry point is:
 

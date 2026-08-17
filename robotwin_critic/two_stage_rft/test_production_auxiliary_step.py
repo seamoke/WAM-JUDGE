@@ -12,6 +12,7 @@ except ModuleNotFoundError:
 if torch is not None:
     from robotwin_critic.two_stage_rft.production_auxiliary_step import (
         _gradient_is_finite,
+        _require_zero_pseudo_source_count,
         _validated_gradient_shards,
     )
 
@@ -57,6 +58,16 @@ class ProductionAuxiliaryStepSourceTest(unittest.TestCase):
 
 @unittest.skipIf(torch is None, "torch unavailable")
 class ProductionAuxiliaryStepTorchTest(unittest.TestCase):
+    def test_disabled_pseudo_stream_requires_zero_source_count(self):
+        trainer = SimpleNamespace(
+            pseudo_enabled=False,
+            rft_source_counts=torch.tensor([64, 0]),
+        )
+        _require_zero_pseudo_source_count(trainer)
+        trainer.rft_source_counts[1] = 1
+        with self.assertRaisesRegex(RuntimeError, "must remain zero"):
+            _require_zero_pseudo_source_count(trainer)
+
     def test_finiteness_supports_tensor_and_to_local_wrapper(self):
         self.assertTrue(_gradient_is_finite(torch.tensor([1.0, -2.0])))
         self.assertFalse(_gradient_is_finite(torch.tensor([1.0, float("nan")])))
