@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Loss-control experiment: reproduce Stage-1 SFT from the original Base model
 # through the current RFT trainer's real-only path.
-RUN_ID="${RUN_ID:-stage1_real_from_base_15k_save3k_8xmi355_$(date -u +%Y%m%dT%H%M%SZ)}"
+RUN_ID="${RUN_ID:-stage1_real_from_base_15k_finalonly_8xmi355_$(date -u +%Y%m%dT%H%M%SZ)}"
 
 export HIP_VISIBLE_DEVICES="${HIP_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-$HIP_VISIBLE_DEVICES}"
@@ -33,7 +33,7 @@ export LINGBOT_DATASET_POOL_DEFER_EMPTY_EMB=1
 
 export RFT_SCHEDULE_MODE=base-auxiliary-pseudo
 export RFT_BASE_AUXILIARY_STEPS="${RFT_BASE_AUXILIARY_STEPS:-15000}"
-export RFT_BASE_AUXILIARY_SAVE_INTERVAL="${RFT_BASE_AUXILIARY_SAVE_INTERVAL:-3000}"
+export RFT_BASE_AUXILIARY_SAVE_INTERVAL="${RFT_BASE_AUXILIARY_SAVE_INTERVAL:-15000}"
 export RFT_BASE_AUXILIARY_ACTIVATION_CHECKPOINTING=0
 export RFT_BASE_AUXILIARY_BATCH_SIZE_PER_GPU="${RFT_BASE_AUXILIARY_BATCH_SIZE_PER_GPU:-8}"
 export REAL_DATA_MODE=stage1

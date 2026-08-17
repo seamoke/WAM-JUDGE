@@ -91,9 +91,10 @@ bash script/run_stage1_real_from_base_8xmi355_15k.sh
 This control initializes from the original `lingbot-va-base` model and trains
 for the full 15,000-step Stage-1 schedule using only the complete Stage-1 real
 dataset. It uses the same `1e-5` learning rate, constant scheduler, 10-step
-warmup, global batch 64, and 3,000-step checkpoint cadence as the original
-Stage-1 SFT. Its pseudo coefficient is exactly zero, so no pseudo sample
-contributes a forward pass, gradient, or source-count update.
+warmup and global batch 64 as the original Stage-1 SFT. To reduce storage and
+transfer, it saves only the final step-15,000 model. Its pseudo coefficient is
+exactly zero, so no pseudo sample contributes a forward pass, gradient, or
+source-count update.
 
 | Setting | Value |
 |---|---:|
@@ -102,7 +103,7 @@ contributes a forward pass, gradient, or source-count update.
 | pseudo loss coefficient | 0 |
 | GPUs | `0,1,2,3,4,5,6,7` |
 | optimizer steps | 15,000 |
-| checkpoints | step 3,000, 6,000, 9,000, 12,000 and 15,000 |
+| checkpoints | final step 15,000 only |
 | real batch per GPU | 8 |
 | real global batch | 64 |
 | gradient accumulation | 1 |
